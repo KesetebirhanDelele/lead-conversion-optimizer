@@ -1,0 +1,18 @@
+{
+  "run_timestamp": "2026-02-09T04:53:58Z",
+  "mode": "READ_ONLY_SCAFFOLD",
+  "args": {
+    "since": "2026-02-01",
+    "until": "2026-02-07",
+    "output_directory": "tmp/snapshots/run2",
+    "target": "booked_call_within_7d"
+  },
+  "git_commit": "76f6b11f8621dc14f8548b9731762cc297f5d5f0",
+  "deterministic_seed": 42,
+  "entities_to_extract": [
+    "contacts",
+    "campaign_steps",
+    "engagement_logs",
+    "outcomes"
+  ]
+}

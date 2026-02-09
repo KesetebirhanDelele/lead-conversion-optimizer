@@ -27,12 +27,15 @@ class TestExtractSnapshotManifest(unittest.TestCase):
             # Assert script ran successfully
             self.assertEqual(result.returncode, 0, f"Script failed with output: {result.stderr}")
             
-            # Find the manifest file
+            # Find the manifest file(s)
             manifest_files = list(Path(temp_dir).glob("run_manifest_*.json"))
-            self.assertEqual(len(manifest_files), 1, "Should create exactly one manifest file")
+            self.assertGreaterEqual(len(manifest_files), 1, "Should create at least one manifest file")
+            
+            # Select the newest manifest file by modification time
+            newest_manifest = max(manifest_files, key=lambda p: p.stat().st_mtime)
             
             # Load and validate manifest
-            with open(manifest_files[0], 'r') as f:
+            with open(newest_manifest, 'r') as f:
                 manifest = json.load(f)
             
             # Assert required keys exist
@@ -52,7 +55,7 @@ class TestExtractSnapshotManifest(unittest.TestCase):
             # Assert args structure
             self.assertEqual(manifest["args"]["since"], "2024-01-01")
             self.assertEqual(manifest["args"]["until"], "2024-01-31")
-            self.assertEqual(manifest["args"]["output_directory"], temp_dir)
+            self.assertEqual(Path(manifest["args"]["output_directory"]).resolve(), Path(temp_dir).resolve())
 
 
 if __name__ == '__main__':

@@ -16,6 +16,9 @@ import sys
 from datetime import datetime, date
 from pathlib import Path
 
+# Fixed deterministic seed for reproducible runs
+DETERMINISTIC_SEED = 42
+
 
 def get_git_commit():
     """Get current git commit hash if available."""
@@ -50,15 +53,12 @@ def validate_target(target):
 
 def create_run_manifest(args, output_dir):
     """Create JSON manifest file documenting the extraction run."""
-    timestamp = datetime.now().isoformat()
+    run_timestamp = datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
     git_commit = get_git_commit()
     
-    # Deterministic seed based on run parameters
-    seed_string = f"{args.since}_{args.until}_{args.target}_{timestamp[:10]}"
-    deterministic_seed = hash(seed_string) % (2**32)  # 32-bit positive integer
-    
     manifest = {
-        "timestamp": timestamp,
+        "run_timestamp": run_timestamp,
+        "mode": "READ_ONLY_SCAFFOLD",
         "args": {
             "since": args.since,
             "until": args.until,
@@ -66,7 +66,7 @@ def create_run_manifest(args, output_dir):
             "target": args.target
         },
         "git_commit": git_commit,
-        "deterministic_seed": deterministic_seed,
+        "deterministic_seed": DETERMINISTIC_SEED,
         "entities_to_extract": [
             "contacts",
             "campaign_steps", 
@@ -75,7 +75,7 @@ def create_run_manifest(args, output_dir):
         ]
     }
     
-    manifest_path = Path(output_dir) / f"run_manifest_{timestamp[:19].replace(':', '-')}.json"
+    manifest_path = Path(output_dir) / f"run_manifest_{run_timestamp[:19].replace(':', '-')}.json"
     
     with open(manifest_path, 'w') as f:
         json.dump(manifest, f, indent=2)
