@@ -1,0 +1,23 @@
+{
+  "run_timestamp": "2026-02-10T18:15:32Z",
+  "mode": "LABEL_BUILD",
+  "args": {
+    "snapshot_dir": "tmp\\snapshots\\full_snapshot_1",
+    "output_directory": "tmp\\labels\\full_snapshot_1",
+    "label_window_days": 7
+  },
+  "git_commit": "71eed08f0b24263121d78a4769b067acc8fb86a2",
+  "inputs": {
+    "engagement_logs": "engagement_logs.csv",
+    "outcomes": "outcomes.csv"
+  },
+  "outputs": {
+    "labels": "labels.csv"
+  },
+  "row_counts": {
+    "engagement_rows": 44,
+    "outcome_rows": 1,
+    "label_rows": 26
+  },
+  "label_window_days": 7
+}

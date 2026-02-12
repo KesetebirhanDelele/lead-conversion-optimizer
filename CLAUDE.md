@@ -1,10 +1,10 @@
 # CLAUDE.md  
-**Colaberry Agent Project Rules & Operating Model**
+**Colaberry Agent Project Rules, QA Model & Operating Contract**
 
 This file defines how Claude (and other AI coding agents) must behave when working in this repository.
 
 This project does **not** use Moltbot.  
-Claude Code and other coding agents are used to **build and maintain** the system — they are **not the runtime system itself**.
+Claude Code and other coding agents are used to **design, build, validate, and maintain** the system — they are **not the runtime system itself**.
 
 ---
 
@@ -17,17 +17,20 @@ Claude’s role is to:
 - reason
 - plan
 - orchestrate
-- modify instructions and code **carefully**
+- validate
+- modify instructions and code **carefully and audibly**
 
-Claude is **not** the runtime executor of business logic.
+Claude is **never** the runtime executor of business logic, tests, or workflows.
 
 ---
 
 ## High-Level Architecture
 
-This project follows an **Agent-First, Deterministic-Execution** model.
+This project follows an **Agent-First, Deterministic-Execution** model with **Test-First Validation**.
 
 ---
+
+## System Layers
 
 ### Layer 1 — Directives (What to do)
 - Human-readable SOPs
@@ -39,6 +42,7 @@ This project follows an **Agent-First, Deterministic-Execution** model.
   - outputs
   - edge cases
   - safety constraints
+  - verification expectations
 
 Directives are **living documents** and must be updated as the system learns.
 
@@ -49,11 +53,12 @@ Directives are **living documents** and must be updated as the system learns.
 - Responsibilities:
   - read relevant directives
   - plan changes
-  - decide which tools/scripts are required
-  - ask clarifying questions when needed
+  - design tests before logic
+  - decide which tools, scripts, and tests are required
+  - ask clarifying questions when intent is ambiguous
   - update directives with learnings
 
-Claude **never** executes business logic directly.
+Claude **never** executes business logic or tests directly.
 
 ---
 
@@ -75,6 +80,19 @@ Execution code must be:
 
 ---
 
+### Layer 4 — Verification (Proving it works)
+- Stored in `/tests`
+- Includes:
+  - unit tests
+  - integration tests
+  - end-to-end tests
+  - UI and workflow validation
+- Tests are **first-class citizens**, not afterthoughts
+
+Claude designs tests; tools execute them.
+
+---
+
 ## Folder Responsibilities
 
 Claude must respect the following boundaries.
@@ -84,11 +102,15 @@ Claude must respect the following boundaries.
 - Behavioral descriptions
 - No executable logic
 
+---
+
 ### `/directives`
 - SOPs and runbooks
 - Step-by-step instructions
 - Human-readable
-- Claude reads these before acting
+- Must define *how success is verified*
+
+---
 
 ### `/execution`
 - Deterministic tools and scripts
@@ -97,18 +119,32 @@ Claude must respect the following boundaries.
 - No orchestration logic
 - No prompts
 
+---
+
 ### `/services/worker` (if present)
 - Long-running or scheduled jobs
 - Calls scripts from `/execution`
 - Represents the **actual runtime system**
 
+---
+
+### `/tests`
+- Automated verification layer
+- Mirrors execution and worker structure
+- May include:
+  - unit tests
+  - integration tests
+  - Playwright / browser-based tests
+  - API contract tests
+  - visual regression tests
+
+---
+
 ### `/config`
 - Environment wiring (dev vs prod identifiers)
 - No secrets
 
-### `/tests`
-- Automated tests (unit + integration)
-- Mirrors execution and worker structure
+---
 
 ### `/tmp`
 - Scratch space
@@ -117,39 +153,67 @@ Claude must respect the following boundaries.
 
 ---
 
-## Testing & Validation Rules
+## Testing & Validation Rules (Non-Negotiable)
 
-Testing is **mandatory**.
+Testing is **mandatory** and **gated**.
+
+---
 
 ### Unit Testing
 - All non-trivial execution logic must have unit tests
-- Pure logic should be tested without I/O
-- External dependencies must be mocked
-- Unit tests must:
+- Pure logic tested without I/O
+- External dependencies mocked
+- Tests must:
   - be fast
   - be deterministic
   - run locally
 
+---
+
 ### Integration Testing
-- Integration tests may touch:
+- May touch:
   - dev sandboxes
-  - test sheets
+  - test databases
   - mock APIs
-- Integration tests must:
+- Must:
   - never touch production
   - require explicit opt-in (env flag or CI label)
 
+---
+
+### End-to-End & UI Testing
+- Used to validate:
+  - routing
+  - links
+  - forms
+  - auth flows
+  - permissions
+  - UI state
+- Browser automation tools (e.g., Playwright) are preferred
+- Claude may:
+  - generate crawl tests
+  - define form test matrices
+  - design visual regression rules
+- Claude must **not** manually simulate UI behavior in prose
+
+---
+
 ### Worker Testing
-- Worker logic is tested as routing logic:
-  - given inputs → correct execution scripts are called
-  - retries, idempotency, and error handling are verified
-- Workers must never send real comms during tests
+- Workers are tested as routing logic:
+  - correct script selection
+  - retry behavior
+  - idempotency
+  - error handling
+- Workers must never send real communications during tests
+
+---
 
 ### Directive Validation
-Directives are not unit tested, but must be validated:
-- required sections exist
-- referenced files/scripts exist
-- markdown is well-formed
+Directives are validated for:
+- required sections
+- referenced files/scripts existence
+- markdown integrity
+- clarity for junior developers
 
 ---
 
@@ -157,15 +221,19 @@ Directives are not unit tested, but must be validated:
 
 ### 1. Never act blindly
 - Always read relevant directives first
-- If no directive exists, ask before creating one
+- If none exist, ask before creating one
+
+---
 
 ### 2. Never mix layers
 - No business logic in directives
 - No orchestration logic in execution scripts
-- No execution inside Claude responses
+- No execution or testing inside Claude responses
 
-### 3. Prefer deterministic tools
-If a task can be done via a script, **do not simulate it in natural language**.
+---
+
+### 3. Prefer deterministic verification
+If behavior can be tested via code, **do not validate it narratively**.
 
 ---
 
@@ -175,7 +243,7 @@ Claude must request approval before:
 - schema changes
 - deleting files
 - production-impacting logic
-- modifying safety or compliance directives
+- modifying safety, compliance, or testing baselines
 
 ---
 
@@ -195,15 +263,15 @@ Failures are inputs, not mistakes.
 ## Tooling Assumptions
 
 Claude may assume:
-- Claude Code is available as a terminal coding agent
-- VS Code / VSCodium / Cursor may be used for inspection and debugging
-- Git is always present
+- Claude Code is available
+- VS Code / VSCodium / Cursor may be used
+- Git is present
 - CI runs automated tests
 
 Claude must **not** assume:
 - Moltbot exists
 - proprietary automation platforms exist
-- production credentials are available locally
+- production credentials exist locally
 
 ---
 
@@ -215,8 +283,8 @@ Therefore:
 - No destructive scripts without confirmation
 - No production writes without explicit environment checks
 - No secrets in repo
-- Clear setup instructions must exist in `/docs`
-- One-command test execution must exist (e.g., `scripts/test`)
+- Clear setup docs must exist
+- One-command test execution must exist
 
 Claude should optimize for:
 - clarity
@@ -230,6 +298,7 @@ Claude should optimize for:
 A change is not complete unless:
 - relevant unit tests exist and pass
 - behavior-changing logic updates directives
+- end-to-end impact is verified when applicable
 - no secrets are introduced
 - validation scripts pass
 - changes are understandable by a junior developer
@@ -238,14 +307,15 @@ A change is not complete unless:
 
 ## Summary
 
-Claude is the **planner and orchestrator**, not the worker.
+Claude is the **planner, validator, and system hardener** — not the worker.
 
 - Directives define intent
-- Scripts do the work
+- Scripts execute deterministically
+- Tests prove correctness
 - Workers run the system
-- Tests protect correctness
-- Claude improves the system over time
+- Claude strengthens the system over time
 
 **Be deliberate.  
+Be testable.  
 Be safe.  
 Prefer systems over cleverness.**

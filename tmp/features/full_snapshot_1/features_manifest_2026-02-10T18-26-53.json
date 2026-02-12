@@ -1,0 +1,31 @@
+{
+  "run_timestamp": "2026-02-10T18:26:53Z",
+  "mode": "FEATURE_BUILD",
+  "args": {
+    "snapshot_dir": "tmp\\snapshots\\full_snapshot_1",
+    "labels_file": "tmp\\labels\\full_snapshot_1\\labels.csv",
+    "output_directory": "tmp\\features\\full_snapshot_1"
+  },
+  "git_commit": "71eed08f0b24263121d78a4769b067acc8fb86a2",
+  "inputs": {
+    "engagement_logs": "engagement_logs.csv",
+    "outcomes_action_log": "outcomes_action_log.csv",
+    "labels": "labels.csv"
+  },
+  "outputs": {
+    "features": "features.csv"
+  },
+  "row_counts": {
+    "engagement_rows": 44,
+    "action_log_rows": 13,
+    "label_rows": 26,
+    "feature_rows": 26
+  },
+  "features_generated": [
+    "engagement_count",
+    "unique_channels",
+    "inbound_count",
+    "outbound_count",
+    "has_subject"
+  ]
+}

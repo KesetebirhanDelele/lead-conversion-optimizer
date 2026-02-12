@@ -20,6 +20,9 @@ Define connection requirements and configuration for SQL Server (Agent Cory DB),
 - **CORY_SQL_PORT** - SQL Server port (defaults to 1433 if not specified)
 - **CORY_SQL_USER** - Username for SQL authentication (required when `CORY_SQL_AUTH_MODE=sqlauth`)
 - **CORY_SQL_PASSWORD** - Password for SQL authentication (required when `CORY_SQL_AUTH_MODE=sqlauth`)
+- **CORY_SQL_ODBC_DRIVER** - ODBC driver name (defaults to "ODBC Driver 18 for SQL Server")
+- **CORY_SQL_ENCRYPT** - Enable connection encryption (`yes` or `no`, defaults to `yes`)
+- **CORY_SQL_TRUST_SERVER_CERT** - Trust server certificate without validation (`true` or `false`, defaults to `true`)
 
 ## Authentication Guidance
 

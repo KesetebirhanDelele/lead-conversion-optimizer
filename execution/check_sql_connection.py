@@ -7,18 +7,14 @@ Validates environment variables first, then attempts database connection.
 
 import os
 import sys
-from pathlib import Path
-
-# Add execution directory to path for local imports
-sys.path.insert(0, str(Path(__file__).parent))
 
 try:
     import pyodbc
 except ImportError:
-    print("❌ pyodbc not available. Install with: pip install pyodbc")
+    print("❌ pyodbc not available")
     sys.exit(1)
 
-from validate_env import validate_environment
+from execution.validate_env import validate_environment
 
 
 def build_connection_string():
@@ -27,10 +23,13 @@ def build_connection_string():
     port = os.getenv('CORY_SQL_PORT', '1433')
     database = os.getenv('CORY_SQL_DATABASE')
     auth_mode = os.getenv('CORY_SQL_AUTH_MODE')
+    driver = os.getenv('CORY_SQL_ODBC_DRIVER', 'ODBC Driver 18 for SQL Server')
+    encrypt = os.getenv('CORY_SQL_ENCRYPT', 'yes')
+    trust_server_cert = os.getenv('CORY_SQL_TRUST_SERVER_CERT', 'true')
     
     # Base connection string
     conn_str_parts = [
-        f"DRIVER={{ODBC Driver 17 for SQL Server}}",
+        f"DRIVER={{{driver}}}",
         f"SERVER={host},{port}",
         f"DATABASE={database}",
     ]
@@ -47,11 +46,14 @@ def build_connection_string():
         ])
     
     # Connection security and timeout settings
-    conn_str_parts.extend([
-        "Encrypt=yes",
-        "TrustServerCertificate=no",
-        "Connection Timeout=30"
-    ])
+    conn_str_parts.append(f"Encrypt={encrypt}")
+    
+    # Handle TrustServerCertificate setting
+    trust_cert_value = trust_server_cert.lower() in ['true', '1', 'yes']
+    trust_cert_str = 'yes' if trust_cert_value else 'no'
+    conn_str_parts.append(f"TrustServerCertificate={trust_cert_str}")
+    
+    conn_str_parts.append("Connection Timeout=30")
     
     return ';'.join(conn_str_parts)
 
