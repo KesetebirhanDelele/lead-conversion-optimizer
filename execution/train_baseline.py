@@ -42,8 +42,7 @@ def validate_csv_file(file_path):
     required_cols = [
         'org_id', 'enrollment_id', 'ghl_contact_id', 'decision_ts_utc',
         'label_responded_within_7d',
-        'attempts_24h', 'attempts_voice_24h', 'attempts_sms_24h', 'attempts_email_24h',
-        'any_call_connected_24h', 'reached_24h', 'engaged_24h', 'positive_intent_24h'
+        'attempts_sms_24h', 'attempts_email_24h', 'attempts_voice_no_voicemail_24h', 'voicemail_drops_24h'
     ]
     
     with open(file_path, 'r', encoding='utf-8') as f:
@@ -68,8 +67,7 @@ def load_and_prepare_data(csv_path):
     
     # Define feature columns (no labels)
     feature_cols = [
-        'attempts_24h', 'attempts_voice_24h', 'attempts_sms_24h', 'attempts_email_24h',
-        'any_call_connected_24h', 'reached_24h', 'engaged_24h', 'positive_intent_24h'
+        'attempts_sms_24h', 'attempts_email_24h', 'attempts_voice_no_voicemail_24h', 'voicemail_drops_24h'
     ]
     
     # Extract features and target

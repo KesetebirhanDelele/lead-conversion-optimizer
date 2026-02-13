@@ -8,6 +8,7 @@ SELECT
   attempts_24h,
   attempts_sms_24h,
   attempts_email_24h,
+  voicemail_drops_24h,
   attempts_voice_no_voicemail_24h,
   label_responded_within_7d
 FROM dbo.vw_gold_training_examples_enrollment_proxy_v2
