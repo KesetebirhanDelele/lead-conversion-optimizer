@@ -288,7 +288,67 @@ def extract_engagement_logs(args, output_dir):
     return row_count
 
 
-def create_run_manifest(args, output_dir, row_count=0, action_log_row_count=0, engagement_logs_row_count=0):
+def extract_training_examples(args, output_dir):
+    """Extract training examples data from SQL Server."""
+    if not hasattr(args, 'training_examples_query_file') or not args.training_examples_query_file:
+        return 0
+    
+    print("Extracting training examples data...")
+    
+    # Read SQL query file
+    with open(args.training_examples_query_file, 'r') as f:
+        query = f.read().strip()
+    
+    if not query:
+        raise ValueError(f"SQL file is empty: {args.training_examples_query_file}")
+    
+    # Connect to database and execute query
+    conn_str = build_connection_string()
+    training_examples_file = Path(output_dir) / "training_examples.csv"
+    row_count = 0
+    
+    try:
+        with pyodbc.connect(conn_str) as conn:
+            cursor = conn.cursor()
+            
+            print(f"Executing training examples query from: {args.training_examples_query_file}")
+            if '?' in query:
+                cursor.execute(query, args.since, args.until)
+            else:
+                cursor.execute(query)
+            
+            # Get column names
+            columns = [desc[0] for desc in cursor.description]
+            
+            # Write to CSV
+            with open(training_examples_file, 'w', newline='', encoding='utf-8') as csvfile:
+                writer = csv.writer(csvfile)
+                
+                # Write headers
+                writer.writerow(columns)
+                
+                # Write data rows
+                while True:
+                    rows = cursor.fetchmany(1000)  # Process in batches
+                    if not rows:
+                        break
+                    
+                    for row in rows:
+                        writer.writerow(row)
+                        row_count += 1
+    
+    except pyodbc.Error as e:
+        print(f"❌ Database error during training examples extraction: {e}")
+        raise
+    except Exception as e:
+        print(f"❌ Error during training examples extraction: {e}")
+        raise
+    
+    print(f"✅ Extracted {row_count} training examples records to {training_examples_file.name}")
+    return row_count
+
+
+def create_run_manifest(args, output_dir, row_count=0, action_log_row_count=0, engagement_logs_row_count=0, training_examples_row_count=0):
     """Create JSON manifest file documenting the extraction run."""
     run_timestamp = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
     git_commit = get_git_commit()
@@ -303,7 +363,8 @@ def create_run_manifest(args, output_dir, row_count=0, action_log_row_count=0, e
             "target": args.target,
             "outcomes_query_file": getattr(args, 'outcomes_query_file', None),
             "outcomes_action_log_query_file": getattr(args, 'outcomes_action_log_query_file', None),
-            "engagement_logs_query_file": getattr(args, 'engagement_logs_query_file', None)
+            "engagement_logs_query_file": getattr(args, 'engagement_logs_query_file', None),
+            "training_examples_query_file": getattr(args, 'training_examples_query_file', None)
         },
         "git_commit": git_commit,
         "deterministic_seed": DETERMINISTIC_SEED,
@@ -330,6 +391,11 @@ def create_run_manifest(args, output_dir, row_count=0, action_log_row_count=0, e
     if getattr(args, "engagement_logs_query_file", None):
         manifest["row_counts"]["engagement_logs"] = engagement_logs_row_count
         manifest["files"]["engagement_logs"] = "engagement_logs.csv"
+    
+    # Add training examples entries only if query file is provided
+    if getattr(args, "training_examples_query_file", None):
+        manifest["row_counts"]["training_examples"] = training_examples_row_count
+        manifest["files"]["training_examples"] = "training_examples.csv"
     
     manifest_path = Path(output_dir) / f"run_manifest_{run_timestamp[:19].replace(':', '-')}.json"
     
@@ -395,6 +461,13 @@ def main():
         help='Path to .sql file containing engagement logs extraction query'
     )
     
+    parser.add_argument(
+        '--training-examples-query-file',
+        required=False,
+        type=validate_sql_file,
+        help='Path to .sql file containing training examples extraction query'
+    )
+    
     args = parser.parse_args()
     
     # Validate date range
@@ -415,13 +488,14 @@ def main():
         row_count = extract_outcomes(args, output_dir)
         action_log_row_count = extract_action_log(args, output_dir)
         engagement_logs_row_count = extract_engagement_logs(args, output_dir)
+        training_examples_row_count = extract_training_examples(args, output_dir)
         
         # Create run manifest with results
-        manifest_path = create_run_manifest(args, output_dir, row_count, action_log_row_count, engagement_logs_row_count)
+        manifest_path = create_run_manifest(args, output_dir, row_count, action_log_row_count, engagement_logs_row_count, training_examples_row_count)
         
         # Print status message
         print("\n" + "="*60)
-        if row_count > 0 or action_log_row_count > 0 or engagement_logs_row_count > 0:
+        if row_count > 0 or action_log_row_count > 0 or engagement_logs_row_count > 0 or training_examples_row_count > 0:
             print("✅ READ-ONLY extraction completed successfully.")
         else:
             print("ℹ️  READ-ONLY extraction completed with no data.")
@@ -433,6 +507,8 @@ def main():
             print(f"Action log extracted: {action_log_row_count} rows")
         if hasattr(args, 'engagement_logs_query_file') and args.engagement_logs_query_file:
             print(f"Engagement logs extracted: {engagement_logs_row_count} rows")
+        if hasattr(args, 'training_examples_query_file') and args.training_examples_query_file:
+            print(f"Training examples extracted: {training_examples_row_count} rows")
         print(f"Query file: {Path(args.outcomes_query_file).name}")
         print(f"Manifest: {manifest_path.name}")
         
