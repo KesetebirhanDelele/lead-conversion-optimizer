@@ -30,18 +30,18 @@ except ImportError as e:
 RANDOM_STATE = 42
 
 
-def validate_csv_file(file_path):
+def validate_csv_file(file_path, label_col="label_responded_within_7d"):
     """Validate CSV file exists and has required columns."""
     if not file_path.exists():
         raise FileNotFoundError(f"Training examples CSV not found: {file_path}")
-    
+
     if not file_path.is_file():
         raise ValueError(f"Path is not a file: {file_path}")
-    
+
     # Check required columns
     required_cols = [
         'org_id', 'enrollment_id', 'ghl_contact_id', 'decision_ts_utc',
-        'label_responded_within_7d',
+        label_col,
         'attempts_sms_24h', 'attempts_email_24h', 'attempts_voice_no_voicemail_24h', 'voicemail_drops_24h'
     ]
     
@@ -55,31 +55,31 @@ def validate_csv_file(file_path):
     return True
 
 
-def load_and_prepare_data(csv_path):
+def load_and_prepare_data(csv_path, label_col="label_responded_within_7d"):
     """Load training data and prepare features/target."""
     print(f"Loading data from {csv_path}...")
-    
+
     # Load CSV
     df = pd.read_csv(csv_path)
-    
+
     # Parse decision timestamp
     df['decision_ts_utc'] = pd.to_datetime(df['decision_ts_utc'])
-    
+
     # Define feature columns (no labels)
     feature_cols = [
         'attempts_sms_24h', 'attempts_email_24h', 'attempts_voice_no_voicemail_24h', 'voicemail_drops_24h'
     ]
-    
+
     # Extract features and target
     X = df[feature_cols].copy()
-    y = df['label_responded_within_7d'].copy()
-    
+    y = df[label_col].copy()
+
     # Handle missing values (fill all with 0 - counts and binary ints from SQL)
     for col in feature_cols:
         X[col] = X[col].fillna(0)
-    
-    # Convert target to int
-    y = y.astype(int)
+
+    # Convert target to int (fill missing labels with 0)
+    y = y.fillna(0).astype(int)
     
     print(f"✅ Loaded {len(df)} rows with {len(feature_cols)} features")
     print(f"Target distribution: {y.value_counts().to_dict()}")
@@ -129,7 +129,7 @@ def train_baseline_model(X_train, y_train, X_test, y_test):
     X_test_scaled = scaler.transform(X_test) if len(X_test) > 0 else np.array([]).reshape(0, X_train.shape[1])
     
     # Train model
-    model = LogisticRegression(random_state=RANDOM_STATE, max_iter=1000)
+    model = LogisticRegression(random_state=RANDOM_STATE, max_iter=1000, class_weight="balanced")
     model.fit(X_train_scaled, y_train)
     
     # Generate predictions
@@ -183,28 +183,28 @@ def compute_metrics(y_true, scores, split_name):
     return metrics
 
 
-def create_predictions_output(df_with_split, train_scores, test_scores, output_path):
+def create_predictions_output(df_with_split, train_scores, test_scores, output_path, label_col="label_responded_within_7d"):
     """Create predictions CSV with scores and metadata."""
     # Copy dataframe to avoid modifying original
     df_out = df_with_split.copy()
-    
+
     # Assign scores directly using boolean masks (safer than enumerate/iterrows)
     train_idx = df_out['split'] == 'train'
     test_idx = df_out['split'] == 'test'
-    
+
     df_out.loc[train_idx, 'score'] = train_scores if len(train_scores) > 0 else 0.0
     df_out.loc[test_idx, 'score'] = test_scores if len(test_scores) > 0 else 0.0
-    
+
     # Add split_order for proper sorting (test=0 first, train=1 second)
     df_out['split_order'] = df_out['split'].map({'test': 0, 'train': 1})
-    
+
     # Select output columns
     output_cols = [
         'org_id', 'enrollment_id', 'ghl_contact_id', 'decision_ts_utc',
-        'score', 'label_responded_within_7d', 'split'
+        'score', label_col, 'split'
     ]
     pred_df = df_out[output_cols + ['split_order']].copy()
-    pred_df.rename(columns={'label_responded_within_7d': 'y_true'}, inplace=True)
+    pred_df.rename(columns={label_col: 'y_true'}, inplace=True)
     
     # Sort by split_order (test first), then score desc within each split
     pred_df_sorted = pred_df.sort_values(['split_order', 'score'], ascending=[True, False])
@@ -232,12 +232,18 @@ def main():
         type=Path,
         help='Path to training_examples.csv file'
     )
-    
+
+    parser.add_argument(
+        '--label-col',
+        default='label_responded_within_7d',
+        help='Name of the label column to use as target (default: label_responded_within_7d)'
+    )
+
     args = parser.parse_args()
-    
+
     # Validate input file
     try:
-        validate_csv_file(args.training_examples_csv)
+        validate_csv_file(args.training_examples_csv, label_col=args.label_col)
     except (FileNotFoundError, ValueError) as e:
         print(f"❌ Error: {e}", file=sys.stderr)
         sys.exit(1)
@@ -247,7 +253,7 @@ def main():
     
     try:
         # Load and prepare data
-        df, X, y, feature_cols = load_and_prepare_data(args.training_examples_csv)
+        df, X, y, feature_cols = load_and_prepare_data(args.training_examples_csv, label_col=args.label_col)
         
         # Check for tiny dataset
         if len(df) < 20:
@@ -256,11 +262,21 @@ def main():
         # Create time-based split
         df_with_split, train_idx, test_idx = create_time_split(df)
         
+        # Rebuild X and y from sorted dataframe to align with split indices
+        X = df_with_split[feature_cols].copy()
+        y = df_with_split[args.label_col].fillna(0).astype(int).copy()
+
         X_train = X[train_idx]
         y_train = y[train_idx]
         X_test = X[test_idx]
         y_test = y[test_idx]
-        
+
+        # Early-exit if training split has only one class
+        if y_train.nunique() < 2:
+            print("⚠️ Cannot train: training split has only one class (all 0s or all 1s). "
+                  "Expand date range or change label.")
+            sys.exit(0)
+
         # Train model
         model, scaler, train_scores, test_scores = train_baseline_model(X_train, y_train, X_test, y_test)
         
@@ -277,7 +293,7 @@ def main():
         print("OUTPUT GENERATION")
         print("="*60)
         
-        pred_df = create_predictions_output(df_with_split, train_scores, test_scores, predictions_path)
+        pred_df = create_predictions_output(df_with_split, train_scores, test_scores, predictions_path, label_col=args.label_col)
         
         # Final summary
         print("\n" + "="*60)

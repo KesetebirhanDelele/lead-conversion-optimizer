@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -m pytest:*)",
+      "Bash(pip install:*)",
+      "Bash(C:Userskesetanaconda3python.exe -m pytest:*)",
+      "Bash(where:*)",
+      "Bash(python:*)",
+      "Bash(\"C:\\\\Python312\\\\python.exe\" -m pip:*)",
+      "Bash(\"C:\\\\Python312\\\\python.exe\":*)",
+      "Bash(\"C:\\\\Python312\\\\python.exe\" -m pip install:*)"
+    ]
+  }
+}
