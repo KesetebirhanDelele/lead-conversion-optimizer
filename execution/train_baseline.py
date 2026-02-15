@@ -10,8 +10,9 @@ Usage:
 
 import argparse
 import csv
+import json
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 import warnings
 
@@ -219,6 +220,45 @@ def create_predictions_output(df_with_split, train_scores, test_scores, output_p
     return pred_df_sorted
 
 
+def compute_precision_at_k(pred_df, ks=(10, 20, 50)):
+    """Compute precision@k from the test split of predictions, skipping k > n_test."""
+    test_df = pred_df[pred_df['split'] == 'test'].copy()
+    n_test = len(test_df)
+    # pred_df is already sorted by score desc within splits
+    results = []
+    for k in ks:
+        if k > n_test:
+            continue
+        top_k = test_df.head(k)
+        n_positive = int(top_k['y_true'].sum())
+        results.append({
+            "k": k,
+            "n": n_test,
+            "n_positive": n_positive,
+            "precision": n_positive / k,
+        })
+    return results
+
+
+def _json_default(obj):
+    """Handle numpy types for JSON serialization."""
+    if isinstance(obj, (np.integer,)):
+        return int(obj)
+    if isinstance(obj, (np.floating,)):
+        return float(obj)
+    if isinstance(obj, np.ndarray):
+        return obj.tolist()
+    raise TypeError(f"Object of type {type(obj).__name__} is not JSON serializable")
+
+
+def write_metrics_json(metrics, output_path):
+    """Write metrics dict to JSON with deterministic formatting."""
+    with open(output_path, 'w', encoding='utf-8') as f:
+        json.dump(metrics, f, indent=2, sort_keys=True, ensure_ascii=False, default=_json_default)
+        f.write('\n')
+    print(f"✅ Metrics written to {output_path}")
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Train baseline logistic regression model on gold training examples",
@@ -294,7 +334,24 @@ def main():
         print("="*60)
         
         pred_df = create_predictions_output(df_with_split, train_scores, test_scores, predictions_path, label_col=args.label_col)
-        
+
+        # Compute precision@k from test split
+        precision_at_k = compute_precision_at_k(pred_df)
+
+        # Write metrics.json
+        metrics_path = args.training_examples_csv.parent / "metrics.json"
+        metrics_payload = {
+            "run_timestamp_utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "input_training_examples_csv": str(args.training_examples_csv),
+            "predictions_csv": str(predictions_path),
+            "label_col": args.label_col,
+            "feature_cols": feature_cols,
+            "train": train_metrics,
+            "test": test_metrics,
+            "precision_at_k": precision_at_k,
+        }
+        write_metrics_json(metrics_payload, metrics_path)
+
         # Final summary
         print("\n" + "="*60)
         print("✅ BASELINE TRAINING COMPLETED")
