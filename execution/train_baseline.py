@@ -17,6 +17,7 @@ from pathlib import Path
 import warnings
 
 try:
+    import joblib
     import pandas as pd
     import numpy as np
     from sklearn.linear_model import LogisticRegression
@@ -24,7 +25,7 @@ try:
     from sklearn.preprocessing import StandardScaler
 except ImportError as e:
     print(f"❌ Required packages not available: {e}")
-    print("Install with: pip install pandas numpy scikit-learn")
+    print("Install with: pip install pandas numpy scikit-learn joblib")
     sys.exit(1)
 
 # Set random state for reproducibility
@@ -319,7 +320,15 @@ def main():
 
         # Train model
         model, scaler, train_scores, test_scores = train_baseline_model(X_train, y_train, X_test, y_test)
-        
+
+        # Save model and scaler artifacts
+        model_path = args.training_examples_csv.parent / "model.joblib"
+        scaler_path = args.training_examples_csv.parent / "scaler.joblib"
+        joblib.dump(model, model_path)
+        print(f"✅ Model saved to {model_path}")
+        joblib.dump(scaler, scaler_path)
+        print(f"✅ Scaler saved to {scaler_path}")
+
         # Compute and print metrics
         print("\n" + "="*60)
         print("MODEL EVALUATION")
@@ -349,6 +358,8 @@ def main():
             "train": train_metrics,
             "test": test_metrics,
             "precision_at_k": precision_at_k,
+            "model_path": str(model_path),
+            "scaler_path": str(scaler_path),
         }
         write_metrics_json(metrics_payload, metrics_path)
 
