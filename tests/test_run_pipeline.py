@@ -10,7 +10,7 @@ from unittest.mock import patch, MagicMock
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "execution"))
-from run_pipeline import build_run_folder_name, build_extract_cmd, build_train_cmd, SCRIPT_DIR
+from run_pipeline import build_run_folder_name, build_extract_cmd, build_train_cmd, build_predict_cmd, build_write_scores_cmd, SCRIPT_DIR
 
 
 # ---------- run folder naming ----------
@@ -161,6 +161,7 @@ class TestPipelineOrchestration:
             "--out-root", str(out_root),
             "--outcomes-query-file", str(outcomes_sql),
             "--training-examples-query-file", str(training_sql),
+            "--no-persist-scores",
         ]
 
         with patch("run_pipeline.subprocess.run", side_effect=fake_subprocess_run):
@@ -170,3 +171,426 @@ class TestPipelineOrchestration:
         assert len(call_log) == 2, f"Expected 2 subprocess calls, got {len(call_log)}"
         assert "extract_snapshot.py" in call_log[0][1]
         assert "train_baseline.py" in call_log[1][1]
+
+
+# ---------- build_predict_cmd ----------
+
+class TestBuildPredictCmd:
+    def test_predict_cmd_uses_correct_script(self, tmp_path):
+        csv_path = tmp_path / "training_examples.csv"
+        cmd = build_predict_cmd(csv_path)
+        assert sys.executable == cmd[0]
+        script_path = Path(cmd[1])
+        assert script_path.name == "predict.py"
+
+    def test_predict_cmd_includes_csv_flag(self, tmp_path):
+        csv_path = tmp_path / "training_examples.csv"
+        cmd = build_predict_cmd(csv_path)
+        assert "--training-examples-csv" in cmd
+        assert str(csv_path) in cmd
+
+    def test_predict_cmd_does_not_include_label_col(self, tmp_path):
+        csv_path = tmp_path / "training_examples.csv"
+        cmd = build_predict_cmd(csv_path)
+        assert "--label-col" not in cmd
+
+
+# ---------- predict mode orchestration ----------
+
+def _base_args(tmp_path):
+    """Build base CLI args list for pipeline tests."""
+    outcomes_sql = tmp_path / "outcomes.sql"
+    outcomes_sql.write_text("SELECT 1", encoding="utf-8")
+    training_sql = tmp_path / "training.sql"
+    training_sql.write_text("SELECT 1", encoding="utf-8")
+    return [
+        "--since", "2024-01-01",
+        "--until", "2024-02-01",
+        "--target", "booked_call_within_7d",
+        "--out-root", str(tmp_path / "runs"),
+        "--outcomes-query-file", str(outcomes_sql),
+        "--training-examples-query-file", str(training_sql),
+    ]
+
+
+class TestPredictModeOrchestration:
+    def test_calls_extract_then_predict(self, tmp_path):
+        """In predict mode, pipeline calls extract then predict.py (not train)."""
+        from run_pipeline import main
+
+        call_log = []
+
+        def fake_subprocess_run(cmd, **kwargs):
+            call_log.append(cmd)
+            if "extract_snapshot.py" in cmd[1]:
+                out_idx = cmd.index("--out")
+                run_dir = Path(cmd[out_idx + 1])
+                run_dir.mkdir(parents=True, exist_ok=True)
+                (run_dir / "training_examples.csv").write_text("h\n", encoding="utf-8")
+                (run_dir / "model.joblib").write_text("fake", encoding="utf-8")
+                (run_dir / "scaler.joblib").write_text("fake", encoding="utf-8")
+            return MagicMock(returncode=0)
+
+        test_args = _base_args(tmp_path) + ["--mode", "predict", "--no-persist-scores"]
+
+        with patch("run_pipeline.subprocess.run", side_effect=fake_subprocess_run):
+            with patch("sys.argv", ["run_pipeline.py"] + test_args):
+                main()
+
+        assert len(call_log) == 2
+        assert "extract_snapshot.py" in call_log[0][1]
+        assert "predict.py" in call_log[1][1]
+        assert "train_baseline.py" not in call_log[1][1]
+
+
+class TestPredictModeMissingCsv:
+    def test_exits_nonzero_when_csv_missing(self, tmp_path):
+        """Predict mode must fail if training_examples.csv absent after extraction."""
+        from run_pipeline import main
+
+        def fake_subprocess_run(cmd, **kwargs):
+            if "extract_snapshot.py" in cmd[1]:
+                out_idx = cmd.index("--out")
+                run_dir = Path(cmd[out_idx + 1])
+                run_dir.mkdir(parents=True, exist_ok=True)
+                # Do NOT create training_examples.csv
+            return MagicMock(returncode=0)
+
+        test_args = _base_args(tmp_path) + ["--mode", "predict"]
+
+        with patch("run_pipeline.subprocess.run", side_effect=fake_subprocess_run):
+            with patch("sys.argv", ["run_pipeline.py"] + test_args):
+                with pytest.raises(SystemExit) as exc_info:
+                    main()
+                assert exc_info.value.code == 1
+
+
+class TestPredictModeMissingArtifacts:
+    def test_exits_nonzero_when_model_missing(self, tmp_path):
+        """Predict mode must fail if model.joblib is absent (no predict.py call)."""
+        from run_pipeline import main
+
+        call_log = []
+
+        def fake_subprocess_run(cmd, **kwargs):
+            call_log.append(cmd)
+            if "extract_snapshot.py" in cmd[1]:
+                out_idx = cmd.index("--out")
+                run_dir = Path(cmd[out_idx + 1])
+                run_dir.mkdir(parents=True, exist_ok=True)
+                (run_dir / "training_examples.csv").write_text("h\n", encoding="utf-8")
+                # model.joblib missing, scaler present
+                (run_dir / "scaler.joblib").write_text("fake", encoding="utf-8")
+            return MagicMock(returncode=0)
+
+        test_args = _base_args(tmp_path) + ["--mode", "predict"]
+
+        with patch("run_pipeline.subprocess.run", side_effect=fake_subprocess_run):
+            with patch("sys.argv", ["run_pipeline.py"] + test_args):
+                with pytest.raises(SystemExit) as exc_info:
+                    main()
+                assert exc_info.value.code == 1
+
+        # predict.py must NOT have been called
+        assert len(call_log) == 1
+        assert "extract_snapshot.py" in call_log[0][1]
+
+    def test_exits_nonzero_when_scaler_missing(self, tmp_path):
+        """Predict mode must fail if scaler.joblib is absent."""
+        from run_pipeline import main
+
+        call_log = []
+
+        def fake_subprocess_run(cmd, **kwargs):
+            call_log.append(cmd)
+            if "extract_snapshot.py" in cmd[1]:
+                out_idx = cmd.index("--out")
+                run_dir = Path(cmd[out_idx + 1])
+                run_dir.mkdir(parents=True, exist_ok=True)
+                (run_dir / "training_examples.csv").write_text("h\n", encoding="utf-8")
+                # scaler.joblib missing, model present
+                (run_dir / "model.joblib").write_text("fake", encoding="utf-8")
+            return MagicMock(returncode=0)
+
+        test_args = _base_args(tmp_path) + ["--mode", "predict"]
+
+        with patch("run_pipeline.subprocess.run", side_effect=fake_subprocess_run):
+            with patch("sys.argv", ["run_pipeline.py"] + test_args):
+                with pytest.raises(SystemExit) as exc_info:
+                    main()
+                assert exc_info.value.code == 1
+
+        assert len(call_log) == 1
+
+
+# ---------- build_write_scores_cmd ----------
+
+class TestBuildWriteScoresCmd:
+    def test_uses_correct_script(self, tmp_path):
+        cmd = build_write_scores_cmd(tmp_path / "predictions.csv", tmp_path / "metrics.json")
+        assert sys.executable == cmd[0]
+        script_path = Path(cmd[1])
+        assert script_path.name == "write_scores_to_sql.py"
+
+    def test_includes_required_flags(self, tmp_path):
+        preds = tmp_path / "predictions.csv"
+        metrics = tmp_path / "metrics.json"
+        cmd = build_write_scores_cmd(preds, metrics, table_name="dbo.custom_table")
+        assert "--predictions-csv" in cmd
+        assert str(preds) in cmd
+        assert "--metrics-json" in cmd
+        assert str(metrics) in cmd
+        assert "--table-name" in cmd
+        assert "dbo.custom_table" in cmd
+
+    def test_default_table_name(self, tmp_path):
+        cmd = build_write_scores_cmd(tmp_path / "p.csv", tmp_path / "m.json")
+        idx = cmd.index("--table-name")
+        assert cmd[idx + 1] == "dbo.lead_scores"
+
+
+# ---------- persist-scores orchestration ----------
+
+class TestPersistScoresOrchestration:
+    def test_three_step_pipeline_train(self, tmp_path):
+        """Train mode: extract -> train -> write_scores (3 subprocess calls)."""
+        from run_pipeline import main
+
+        call_log = []
+
+        def fake_subprocess_run(cmd, **kwargs):
+            call_log.append(cmd)
+            if "extract_snapshot.py" in cmd[1]:
+                out_idx = cmd.index("--out")
+                run_dir = Path(cmd[out_idx + 1])
+                run_dir.mkdir(parents=True, exist_ok=True)
+                (run_dir / "training_examples.csv").write_text("h\n", encoding="utf-8")
+            elif "train_baseline.py" in cmd[1]:
+                csv_idx = cmd.index("--training-examples-csv")
+                csv_path = Path(cmd[csv_idx + 1])
+                run_dir = csv_path.parent
+                (run_dir / "predictions.csv").write_text("h\n", encoding="utf-8")
+                (run_dir / "metrics.json").write_text("{}", encoding="utf-8")
+            return MagicMock(returncode=0)
+
+        test_args = _base_args(tmp_path) + ["--persist-scores"]
+
+        with patch("run_pipeline.subprocess.run", side_effect=fake_subprocess_run):
+            with patch("sys.argv", ["run_pipeline.py"] + test_args):
+                main()
+
+        assert len(call_log) == 3, f"Expected 3 subprocess calls, got {len(call_log)}"
+        assert "extract_snapshot.py" in call_log[0][1]
+        assert "train_baseline.py" in call_log[1][1]
+        assert "write_scores_to_sql.py" in call_log[2][1]
+
+    def test_three_step_pipeline_predict(self, tmp_path):
+        """Predict mode: extract -> predict -> write_scores (3 subprocess calls)."""
+        from run_pipeline import main
+
+        call_log = []
+
+        def fake_subprocess_run(cmd, **kwargs):
+            call_log.append(cmd)
+            if "extract_snapshot.py" in cmd[1]:
+                out_idx = cmd.index("--out")
+                run_dir = Path(cmd[out_idx + 1])
+                run_dir.mkdir(parents=True, exist_ok=True)
+                (run_dir / "training_examples.csv").write_text("h\n", encoding="utf-8")
+                (run_dir / "model.joblib").write_text("fake", encoding="utf-8")
+                (run_dir / "scaler.joblib").write_text("fake", encoding="utf-8")
+            elif "predict.py" in cmd[1]:
+                csv_idx = cmd.index("--training-examples-csv")
+                csv_path = Path(cmd[csv_idx + 1])
+                run_dir = csv_path.parent
+                (run_dir / "predictions.csv").write_text("h\n", encoding="utf-8")
+                (run_dir / "metrics.json").write_text("{}", encoding="utf-8")
+            return MagicMock(returncode=0)
+
+        test_args = _base_args(tmp_path) + ["--mode", "predict"]
+
+        with patch("run_pipeline.subprocess.run", side_effect=fake_subprocess_run):
+            with patch("sys.argv", ["run_pipeline.py"] + test_args):
+                main()
+
+        assert len(call_log) == 3
+        assert "extract_snapshot.py" in call_log[0][1]
+        assert "predict.py" in call_log[1][1]
+        assert "write_scores_to_sql.py" in call_log[2][1]
+
+    def test_no_persist_scores_skips_step3(self, tmp_path):
+        """--no-persist-scores skips write_scores_to_sql.py call."""
+        from run_pipeline import main
+
+        call_log = []
+
+        def fake_subprocess_run(cmd, **kwargs):
+            call_log.append(cmd)
+            if "extract_snapshot.py" in cmd[1]:
+                out_idx = cmd.index("--out")
+                run_dir = Path(cmd[out_idx + 1])
+                run_dir.mkdir(parents=True, exist_ok=True)
+                (run_dir / "training_examples.csv").write_text("h\n", encoding="utf-8")
+            return MagicMock(returncode=0)
+
+        test_args = _base_args(tmp_path) + ["--no-persist-scores"]
+
+        with patch("run_pipeline.subprocess.run", side_effect=fake_subprocess_run):
+            with patch("sys.argv", ["run_pipeline.py"] + test_args):
+                main()
+
+        assert len(call_log) == 2
+        assert "extract_snapshot.py" in call_log[0][1]
+        assert "train_baseline.py" in call_log[1][1]
+        # No write_scores_to_sql.py call
+        assert all("write_scores_to_sql.py" not in c[1] for c in call_log)
+
+    def test_custom_scores_table_name_passed_through(self, tmp_path):
+        """--scores-table-name value appears in write_scores_to_sql.py command."""
+        from run_pipeline import main
+
+        call_log = []
+
+        def fake_subprocess_run(cmd, **kwargs):
+            call_log.append(cmd)
+            if "extract_snapshot.py" in cmd[1]:
+                out_idx = cmd.index("--out")
+                run_dir = Path(cmd[out_idx + 1])
+                run_dir.mkdir(parents=True, exist_ok=True)
+                (run_dir / "training_examples.csv").write_text("h\n", encoding="utf-8")
+            elif "train_baseline.py" in cmd[1]:
+                csv_idx = cmd.index("--training-examples-csv")
+                run_dir = Path(cmd[csv_idx + 1]).parent
+                (run_dir / "predictions.csv").write_text("h\n", encoding="utf-8")
+                (run_dir / "metrics.json").write_text("{}", encoding="utf-8")
+            return MagicMock(returncode=0)
+
+        test_args = _base_args(tmp_path) + ["--scores-table-name", "dbo.custom_scores"]
+
+        with patch("run_pipeline.subprocess.run", side_effect=fake_subprocess_run):
+            with patch("sys.argv", ["run_pipeline.py"] + test_args):
+                main()
+
+        write_cmd = call_log[2]
+        assert "write_scores_to_sql.py" in write_cmd[1]
+        idx = write_cmd.index("--table-name")
+        assert write_cmd[idx + 1] == "dbo.custom_scores"
+
+    def test_persist_fails_when_predictions_missing(self, tmp_path):
+        """Pipeline exits 1 if predictions.csv missing before Step 3."""
+        from run_pipeline import main
+
+        def fake_subprocess_run(cmd, **kwargs):
+            if "extract_snapshot.py" in cmd[1]:
+                out_idx = cmd.index("--out")
+                run_dir = Path(cmd[out_idx + 1])
+                run_dir.mkdir(parents=True, exist_ok=True)
+                (run_dir / "training_examples.csv").write_text("h\n", encoding="utf-8")
+            # train_baseline.py succeeds but does NOT produce predictions.csv
+            return MagicMock(returncode=0)
+
+        test_args = _base_args(tmp_path)
+
+        with patch("run_pipeline.subprocess.run", side_effect=fake_subprocess_run):
+            with patch("sys.argv", ["run_pipeline.py"] + test_args):
+                with pytest.raises(SystemExit) as exc_info:
+                    main()
+                assert exc_info.value.code == 1
+
+
+# ---------- artifacts-dir ----------
+
+class TestArtifactsDir:
+    def test_copies_artifacts_and_calls_predict(self, tmp_path):
+        """--artifacts-dir copies model/scaler into run_dir before predict.py."""
+        from run_pipeline import main
+
+        # Create an artifacts directory with fake model files
+        artifacts = tmp_path / "artifacts"
+        artifacts.mkdir()
+        (artifacts / "model.joblib").write_text("model_data", encoding="utf-8")
+        (artifacts / "scaler.joblib").write_text("scaler_data", encoding="utf-8")
+
+        call_log = []
+
+        def fake_subprocess_run(cmd, **kwargs):
+            call_log.append(cmd)
+            if "extract_snapshot.py" in cmd[1]:
+                out_idx = cmd.index("--out")
+                run_dir = Path(cmd[out_idx + 1])
+                run_dir.mkdir(parents=True, exist_ok=True)
+                (run_dir / "training_examples.csv").write_text("h\n", encoding="utf-8")
+            elif "predict.py" in cmd[1]:
+                csv_idx = cmd.index("--training-examples-csv")
+                run_dir = Path(cmd[csv_idx + 1]).parent
+                # Verify artifacts were copied into run_dir
+                assert (run_dir / "model.joblib").exists()
+                assert (run_dir / "scaler.joblib").exists()
+                assert (run_dir / "model.joblib").read_text(encoding="utf-8") == "model_data"
+                (run_dir / "predictions.csv").write_text("h\n", encoding="utf-8")
+                (run_dir / "metrics.json").write_text("{}", encoding="utf-8")
+            return MagicMock(returncode=0)
+
+        test_args = _base_args(tmp_path) + [
+            "--mode", "predict",
+            "--artifacts-dir", str(artifacts),
+        ]
+
+        with patch("run_pipeline.subprocess.run", side_effect=fake_subprocess_run):
+            with patch("sys.argv", ["run_pipeline.py"] + test_args):
+                main()
+
+        assert len(call_log) == 3
+        assert "predict.py" in call_log[1][1]
+        assert "write_scores_to_sql.py" in call_log[2][1]
+
+    def test_exits_when_artifacts_dir_missing(self, tmp_path):
+        """--artifacts-dir pointing to nonexistent path exits 1."""
+        from run_pipeline import main
+
+        def fake_subprocess_run(cmd, **kwargs):
+            if "extract_snapshot.py" in cmd[1]:
+                out_idx = cmd.index("--out")
+                run_dir = Path(cmd[out_idx + 1])
+                run_dir.mkdir(parents=True, exist_ok=True)
+                (run_dir / "training_examples.csv").write_text("h\n", encoding="utf-8")
+            return MagicMock(returncode=0)
+
+        test_args = _base_args(tmp_path) + [
+            "--mode", "predict",
+            "--artifacts-dir", str(tmp_path / "nonexistent"),
+        ]
+
+        with patch("run_pipeline.subprocess.run", side_effect=fake_subprocess_run):
+            with patch("sys.argv", ["run_pipeline.py"] + test_args):
+                with pytest.raises(SystemExit) as exc_info:
+                    main()
+                assert exc_info.value.code == 1
+
+    def test_exits_when_model_missing_in_artifacts_dir(self, tmp_path):
+        """--artifacts-dir with missing model.joblib exits 1."""
+        from run_pipeline import main
+
+        artifacts = tmp_path / "artifacts"
+        artifacts.mkdir()
+        # Only scaler, no model
+        (artifacts / "scaler.joblib").write_text("fake", encoding="utf-8")
+
+        def fake_subprocess_run(cmd, **kwargs):
+            if "extract_snapshot.py" in cmd[1]:
+                out_idx = cmd.index("--out")
+                run_dir = Path(cmd[out_idx + 1])
+                run_dir.mkdir(parents=True, exist_ok=True)
+                (run_dir / "training_examples.csv").write_text("h\n", encoding="utf-8")
+            return MagicMock(returncode=0)
+
+        test_args = _base_args(tmp_path) + [
+            "--mode", "predict",
+            "--artifacts-dir", str(artifacts),
+        ]
+
+        with patch("run_pipeline.subprocess.run", side_effect=fake_subprocess_run):
+            with patch("sys.argv", ["run_pipeline.py"] + test_args):
+                with pytest.raises(SystemExit) as exc_info:
+                    main()
+                assert exc_info.value.code == 1

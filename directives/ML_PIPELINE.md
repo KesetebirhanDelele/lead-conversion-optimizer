@@ -60,7 +60,66 @@ Improve lead conversion rates by learning from campaign and lead interaction dat
 - Suggest prompt optimizations and step sequence changes
 - Prioritize recommendations by impact potential
 
-### 7. Publish
+### 7. Persist Scores to SQL
+- Upsert scored leads from predictions.csv into `dbo.lead_scores`
+- Match on `(org_id, enrollment_id, label_col)` — update existing, insert new
+- Metadata (model_path, scaler_path, run_timestamp_utc) written alongside each row
+- Supports `--split {all,test,train}` to control which rows are written
+- Always use `--dry-run` first to verify row counts before writing
+
+```powershell
+# Dry run (verify row count, no DB write)
+python execution/write_scores_to_sql.py `
+    --predictions-csv tmp/runs/<run>/predictions.csv `
+    --metrics-json tmp/runs/<run>/metrics.json `
+    --dry-run
+
+# Write test-split rows only
+python execution/write_scores_to_sql.py `
+    --predictions-csv tmp/runs/<run>/predictions.csv `
+    --metrics-json tmp/runs/<run>/metrics.json `
+    --split test
+
+# Write all rows
+python execution/write_scores_to_sql.py `
+    --predictions-csv tmp/runs/<run>/predictions.csv `
+    --metrics-json tmp/runs/<run>/metrics.json
+```
+
+### 8. Daily Scoring Job
+- `execution/run_daily.py` wraps `run_pipeline.py` for scheduled scoring
+- Computes `--since`/`--until` from `--days-back` (default 90 days)
+- Default mode is **predict** — scores new leads using existing model artifacts
+- Requires `--artifacts-dir` pointing to a completed training run
+- Persist-scores enabled by default (writes to `dbo.lead_scores`)
+
+```powershell
+# Daily predict job (90-day window, reuse trained model)
+python execution/run_daily.py `
+    --artifacts-dir tmp/runs/latest_train_run `
+    --outcomes-query-file queries/outcomes.sql `
+    --training-examples-query-file queries/gold_training_examples_proxy_v2.sql
+
+# Weekly retrain job (120-day window)
+python execution/run_daily.py --mode train --days-back 120 `
+    --outcomes-query-file queries/outcomes.sql `
+    --training-examples-query-file queries/gold_training_examples_proxy_v2.sql
+
+# PowerShell Task Scheduler (daily at 06:00)
+schtasks /create /tn "LeadScoring_Daily" /tr `
+    "C:\Python312\python.exe C:\path\to\execution\run_daily.py `
+     --artifacts-dir C:\path\to\latest_train --mode predict `
+     --outcomes-query-file C:\path\to\queries\outcomes.sql `
+     --training-examples-query-file C:\path\to\queries\gold_training_examples_proxy_v2.sql" `
+    /sc daily /st 06:00
+```
+
+#### Artifact Reuse (predict mode)
+- `--artifacts-dir` copies `model.joblib` and `scaler.joblib` into the new run folder
+- `predict.py` expects artifacts alongside `training_examples.csv`
+- Each run folder is self-contained with its own predictions.csv and metrics.json
+
+### 9. Publish
 - Store results in model registry with versioning
 - Generate human-readable recommendation reports
 - Create reproducible experiment documentation
