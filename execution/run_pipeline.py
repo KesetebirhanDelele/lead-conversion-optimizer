@@ -32,12 +32,18 @@ Usage (skip score persistence):
 """
 
 import argparse
+import logging
 import shutil
 import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
+from config import LOG_LEVEL
+from logging_utils import setup_logging
+
+
+logger = logging.getLogger(__name__)
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 
@@ -116,79 +122,84 @@ def main():
     parser.add_argument("--no-persist-scores", action="store_false", dest="persist_scores", help="Skip score persistence to SQL")
     parser.add_argument("--scores-table-name", default="dbo.lead_scores", help="Target SQL table for scores (default: dbo.lead_scores)")
     parser.add_argument("--artifacts-dir", type=Path, default=None, help="Directory containing model.joblib/scaler.joblib for predict mode (overrides run_dir)")
+    parser.add_argument("--log-level", default=None, help="Log level: DEBUG, INFO, WARNING, ERROR (default: from LOG_LEVEL env var)")
 
     args = parser.parse_args()
+
+    setup_logging(args.log_level or LOG_LEVEL)
+
+    logger.info("Pipeline mode=%s, since=%s, until=%s, target=%s", args.mode, args.since, args.until, args.target)
 
     # Create run folder
     run_name = build_run_folder_name(args.since, args.until, args.target)
     run_dir = args.out_root / run_name
     run_dir.mkdir(parents=True, exist_ok=True)
-    print(f"Run folder: {run_dir}")
+    logger.info("Run folder: %s", run_dir)
 
     # Step 1: Extract snapshot
-    print("\n" + "=" * 60)
-    print("STEP 1: EXTRACT SNAPSHOT")
-    print("=" * 60)
+    logger.info("=" * 60)
+    logger.info("STEP 1: EXTRACT SNAPSHOT")
+    logger.info("=" * 60)
 
     extract_cmd = build_extract_cmd(args, run_dir)
-    print(f"Running: {' '.join(extract_cmd)}")
+    logger.info("Running: %s", ' '.join(extract_cmd))
     result = subprocess.run(extract_cmd)
     if result.returncode != 0:
-        print(f"Extraction failed with exit code {result.returncode}", file=sys.stderr)
+        logger.error("Extraction failed with exit code %d", result.returncode)
         sys.exit(result.returncode)
 
     # Fail fast if training_examples.csv is missing
     training_csv = run_dir / "training_examples.csv"
     if not training_csv.exists():
-        print(f"training_examples.csv not found in {run_dir}", file=sys.stderr)
+        logger.error("training_examples.csv not found in %s", run_dir)
         sys.exit(1)
 
     # Step 2: Train or Predict
     if args.mode == "train":
-        print("\n" + "=" * 60)
-        print("STEP 2: TRAIN BASELINE MODEL")
-        print("=" * 60)
+        logger.info("=" * 60)
+        logger.info("STEP 2: TRAIN BASELINE MODEL")
+        logger.info("=" * 60)
 
         train_cmd = build_train_cmd(training_csv, label_col=args.label_col)
-        print(f"Running: {' '.join(train_cmd)}")
+        logger.info("Running: %s", ' '.join(train_cmd))
         result = subprocess.run(train_cmd)
         if result.returncode != 0:
-            print(f"Training failed with exit code {result.returncode}", file=sys.stderr)
+            logger.error("Training failed with exit code %d", result.returncode)
             sys.exit(result.returncode)
 
     elif args.mode == "predict":
-        print("\n" + "=" * 60)
-        print("STEP 2: PREDICT (score only)")
-        print("=" * 60)
+        logger.info("=" * 60)
+        logger.info("STEP 2: PREDICT (score only)")
+        logger.info("=" * 60)
 
         # If --artifacts-dir is provided, copy model artifacts into run_dir
         if args.artifacts_dir is not None:
             if not args.artifacts_dir.is_dir():
-                print(f"--artifacts-dir does not exist or is not a directory: {args.artifacts_dir}", file=sys.stderr)
+                logger.error("--artifacts-dir does not exist or is not a directory: %s", args.artifacts_dir)
                 sys.exit(1)
             for artifact in ("model.joblib", "scaler.joblib"):
                 src = args.artifacts_dir / artifact
                 if not src.exists():
-                    print(f"{artifact} not found in --artifacts-dir {args.artifacts_dir}", file=sys.stderr)
+                    logger.error("%s not found in --artifacts-dir %s", artifact, args.artifacts_dir)
                     sys.exit(1)
                 shutil.copy2(src, run_dir / artifact)
-                print(f"Copied {artifact} from {args.artifacts_dir} to {run_dir}")
+                logger.info("Copied %s from %s to %s", artifact, args.artifacts_dir, run_dir)
 
         # Verify model artifacts exist before calling predict.py
         model_path = run_dir / "model.joblib"
         scaler_path = run_dir / "scaler.joblib"
         if not model_path.exists():
-            print(f"model.joblib not found in {run_dir}. Run training first or copy artifacts into the run folder.", file=sys.stderr)
+            logger.error("model.joblib not found in %s. Run training first or copy artifacts into the run folder.", run_dir)
             sys.exit(1)
         if not scaler_path.exists():
-            print(f"scaler.joblib not found in {run_dir}. Run training first or copy artifacts into the run folder.", file=sys.stderr)
+            logger.error("scaler.joblib not found in %s. Run training first or copy artifacts into the run folder.", run_dir)
             sys.exit(1)
 
         predict_cmd = build_predict_cmd(training_csv)
-        print(f"Running: {' '.join(predict_cmd)}")
+        logger.info("Running: %s", ' '.join(predict_cmd))
         result = subprocess.run(predict_cmd)
         if result.returncode != 0:
-            print(f"Prediction failed with exit code {result.returncode}", file=sys.stderr)
+            logger.error("Prediction failed with exit code %d", result.returncode)
             sys.exit(result.returncode)
 
     # Step 3: Persist scores (optional)
@@ -197,27 +208,27 @@ def main():
         metrics_json = run_dir / "metrics.json"
 
         if not predictions_csv.exists():
-            print(f"predictions.csv not found in {run_dir} — skipping score persistence", file=sys.stderr)
+            logger.error("predictions.csv not found in %s", run_dir)
             sys.exit(1)
         if not metrics_json.exists():
-            print(f"metrics.json not found in {run_dir} — skipping score persistence", file=sys.stderr)
+            logger.error("metrics.json not found in %s", run_dir)
             sys.exit(1)
 
-        print("\n" + "=" * 60)
-        print("STEP 3: PERSIST SCORES TO SQL")
-        print("=" * 60)
+        logger.info("=" * 60)
+        logger.info("STEP 3: PERSIST SCORES TO SQL")
+        logger.info("=" * 60)
 
         write_cmd = build_write_scores_cmd(predictions_csv, metrics_json, table_name=args.scores_table_name)
-        print(f"Running: {' '.join(write_cmd)}")
+        logger.info("Running: %s", ' '.join(write_cmd))
         result = subprocess.run(write_cmd)
         if result.returncode != 0:
-            print(f"Score persistence failed with exit code {result.returncode}", file=sys.stderr)
+            logger.error("Score persistence failed with exit code %d", result.returncode)
             sys.exit(result.returncode)
 
-    print("\n" + "=" * 60)
-    print("PIPELINE COMPLETED")
-    print("=" * 60)
-    print(f"Run folder: {run_dir}")
+    logger.info("=" * 60)
+    logger.info("PIPELINE COMPLETED")
+    logger.info("=" * 60)
+    logger.info("Run folder: %s", run_dir)
 
 
 if __name__ == "__main__":

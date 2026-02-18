@@ -17,19 +17,24 @@ Usage (PowerShell):
 
 import argparse
 import json
+import logging
 import os
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
+from config import LOG_LEVEL
+from logging_utils import setup_logging
+
 try:
     import pandas as pd
     import pyodbc
 except ImportError as e:
-    print(f"❌ Required packages not available: {e}")
+    print(f"Required packages not available: {e}")
     print("Install with: pip install pandas pyodbc")
     sys.exit(1)
 
+logger = logging.getLogger(__name__)
 
 MERGE_SQL = """
 MERGE {table} AS tgt
@@ -186,22 +191,26 @@ def main():
                         help="Rows per batch (default: 500)")
     parser.add_argument("--dry-run", action="store_true",
                         help="Print row count without writing to DB")
+    parser.add_argument("--log-level", default=None,
+                        help="Log level: DEBUG, INFO, WARNING, ERROR (default: from LOG_LEVEL env var)")
 
     args = parser.parse_args()
+
+    setup_logging(args.log_level or LOG_LEVEL)
 
     # Load inputs
     try:
         metrics = load_metrics(args.metrics_json)
         df = load_predictions(args.predictions_csv, split_filter=args.split)
     except (FileNotFoundError, ValueError) as e:
-        print(f"❌ {e}", file=sys.stderr)
+        logger.error("%s", e)
         sys.exit(1)
 
     rows = build_upsert_rows(df, metrics, args.predictions_csv)
-    print(f"Prepared {len(rows)} rows (split={args.split}) for {args.table_name}")
+    logger.info("Prepared %d rows (split=%s) for %s", len(rows), args.split, args.table_name)
 
     if args.dry_run:
-        print(f"✅ DRY RUN: would upsert {len(rows)} rows into {args.table_name}")
+        logger.info("DRY RUN: would upsert %d rows into %s", len(rows), args.table_name)
         sys.exit(0)
 
     # Connect and upsert
@@ -209,14 +218,14 @@ def main():
         conn_str = build_connection_string()
         conn = pyodbc.connect(conn_str)
     except Exception as e:
-        print(f"❌ Database connection failed: {e}", file=sys.stderr)
+        logger.error("Database connection failed: %s", e)
         sys.exit(1)
 
     try:
         n = upsert_rows(conn, rows, args.table_name, batch_size=args.batch_size)
-        print(f"✅ Upserted {n} rows into {args.table_name}")
+        logger.info("Upserted %d rows into %s", n, args.table_name)
     except Exception as e:
-        print(f"❌ Upsert failed: {e}", file=sys.stderr)
+        logger.error("Upsert failed: %s", e)
         sys.exit(1)
     finally:
         conn.close()

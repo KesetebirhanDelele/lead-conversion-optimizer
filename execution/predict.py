@@ -19,9 +19,13 @@ Usage (PowerShell):
 import argparse
 import csv
 import json
+import logging
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+
+from config import LOG_LEVEL
+from logging_utils import setup_logging
 
 try:
     import joblib
@@ -29,10 +33,11 @@ try:
     import numpy as np
     from sklearn.metrics import average_precision_score, roc_auc_score
 except ImportError as e:
-    print(f"❌ Required packages not available: {e}")
+    print(f"Required packages not available: {e}")
     print("Install with: pip install pandas numpy scikit-learn joblib")
     sys.exit(1)
 
+logger = logging.getLogger(__name__)
 
 FEATURE_COLS = [
     'attempts_sms_24h',
@@ -68,7 +73,7 @@ def validate_inputs(csv_path, model_path, scaler_path):
 
 def load_and_score(csv_path, model, scaler):
     """Load CSV, prepare features, and generate scores."""
-    print(f"Loading data from {csv_path}...")
+    logger.info("Loading data from %s...", csv_path)
     df = pd.read_csv(csv_path)
     df['decision_ts_utc'] = pd.to_datetime(df['decision_ts_utc'])
 
@@ -80,7 +85,7 @@ def load_and_score(csv_path, model, scaler):
     scores = model.predict_proba(X_scaled)[:, 1]
     df['score'] = scores
 
-    print(f"✅ Scored {len(df)} rows")
+    logger.info("Scored %d rows", len(df))
     return df
 
 
@@ -178,7 +183,7 @@ def write_metrics_json(metrics, output_path):
     with open(output_path, 'w', encoding='utf-8') as f:
         json.dump(metrics, f, indent=2, sort_keys=True, ensure_ascii=False, default=_json_default)
         f.write('\n')
-    print(f"✅ Metrics written to {output_path}")
+    logger.info("Metrics written to %s", output_path)
 
 
 def main():
@@ -204,8 +209,14 @@ def main():
         '--metrics-out', type=Path, default=None,
         help='Output path for metrics JSON (default: <csv_dir>/metrics.json)',
     )
+    parser.add_argument(
+        '--log-level', default=None,
+        help='Log level: DEBUG, INFO, WARNING, ERROR (default: from LOG_LEVEL env var)',
+    )
 
     args = parser.parse_args()
+
+    setup_logging(args.log_level or LOG_LEVEL)
 
     csv_dir = args.training_examples_csv.parent
     model_path = csv_dir / "model.joblib"
@@ -217,17 +228,17 @@ def main():
     try:
         validate_inputs(args.training_examples_csv, model_path, scaler_path)
     except (FileNotFoundError, ValueError) as e:
-        print(f"❌ Error: {e}", file=sys.stderr)
+        logger.error("Error: %s", e)
         sys.exit(1)
 
     try:
         # Load artifacts
-        print(f"Loading model from {model_path}...")
+        logger.info("Loading model from %s...", model_path)
         model = joblib.load(model_path)
-        print(f"✅ Model loaded")
-        print(f"Loading scaler from {scaler_path}...")
+        logger.info("Model loaded")
+        logger.info("Loading scaler from %s...", scaler_path)
         scaler = joblib.load(scaler_path)
-        print(f"✅ Scaler loaded")
+        logger.info("Scaler loaded")
 
         # Score
         df = load_and_score(args.training_examples_csv, model, scaler)
@@ -235,25 +246,25 @@ def main():
         # Build predictions output
         pred_df, has_label = build_predictions_df(df, args.label_col)
         pred_df.to_csv(predictions_out, index=False)
-        print(f"✅ Predictions written to {predictions_out}")
+        logger.info("Predictions written to %s", predictions_out)
 
         # Build and write metrics
         metrics = build_metrics(args, pred_df, has_label, model_path, scaler_path, predictions_out)
         write_metrics_json(metrics, metrics_out)
 
         # Summary
-        print("\n" + "=" * 60)
-        print("✅ PREDICT COMPLETED")
-        print("=" * 60)
-        print(f"Input: {args.training_examples_csv}")
-        print(f"Predictions: {predictions_out}")
-        print(f"Metrics: {metrics_out}")
-        print(f"Rows scored: {len(pred_df)}")
+        logger.info("=" * 60)
+        logger.info("PREDICT COMPLETED")
+        logger.info("=" * 60)
+        logger.info("Input: %s", args.training_examples_csv)
+        logger.info("Predictions: %s", predictions_out)
+        logger.info("Metrics: %s", metrics_out)
+        logger.info("Rows scored: %d", len(pred_df))
         if has_label and metrics.get("pr_auc") is not None:
-            print(f"PR-AUC: {metrics['pr_auc']:.4f}")
+            logger.info("PR-AUC: %.4f", metrics['pr_auc'])
 
     except Exception as e:
-        print(f"\n❌ Prediction failed: {e}", file=sys.stderr)
+        logger.error("Prediction failed: %s", e)
         sys.exit(1)
 
 

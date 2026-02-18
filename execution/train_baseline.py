@@ -11,10 +11,14 @@ Usage:
 import argparse
 import csv
 import json
+import logging
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
 import warnings
+
+from config import LOG_LEVEL
+from logging_utils import setup_logging
 
 try:
     import joblib
@@ -24,9 +28,11 @@ try:
     from sklearn.metrics import average_precision_score, roc_auc_score, classification_report
     from sklearn.preprocessing import StandardScaler
 except ImportError as e:
-    print(f"❌ Required packages not available: {e}")
+    print(f"Required packages not available: {e}")
     print("Install with: pip install pandas numpy scikit-learn joblib")
     sys.exit(1)
+
+logger = logging.getLogger(__name__)
 
 # Set random state for reproducibility
 RANDOM_STATE = 42
@@ -46,20 +52,20 @@ def validate_csv_file(file_path, label_col="label_responded_within_7d"):
         label_col,
         'attempts_sms_24h', 'attempts_email_24h', 'attempts_voice_no_voicemail_24h', 'voicemail_drops_24h'
     ]
-    
+
     with open(file_path, 'r', encoding='utf-8') as f:
         reader = csv.DictReader(f)
         headers = set(reader.fieldnames or [])
         missing_cols = set(required_cols) - headers
         if missing_cols:
             raise ValueError(f"Missing required columns in {file_path.name}: {missing_cols}")
-    
+
     return True
 
 
 def load_and_prepare_data(csv_path, label_col="label_responded_within_7d"):
     """Load training data and prepare features/target."""
-    print(f"Loading data from {csv_path}...")
+    logger.info("Loading data from %s...", csv_path)
 
     # Load CSV
     df = pd.read_csv(csv_path)
@@ -82,10 +88,10 @@ def load_and_prepare_data(csv_path, label_col="label_responded_within_7d"):
 
     # Convert target to int (fill missing labels with 0)
     y = y.fillna(0).astype(int)
-    
-    print(f"✅ Loaded {len(df)} rows with {len(feature_cols)} features")
-    print(f"Target distribution: {y.value_counts().to_dict()}")
-    
+
+    logger.info("Loaded %d rows with %d features", len(df), len(feature_cols))
+    logger.info("Target distribution: %s", y.value_counts().to_dict())
+
     return df, X, y, feature_cols
 
 
@@ -93,28 +99,29 @@ def create_time_split(df, test_size=0.2):
     """Create train/test split based on decision timestamp (earliest 80% train, latest 20% test)."""
     # Sort by decision timestamp
     df_sorted = df.sort_values('decision_ts_utc').reset_index(drop=True)
-    
+
     # Calculate split point
     n_total = len(df_sorted)
     n_train = int(n_total * (1 - test_size))
-    
+
     # Create split indicator
     split_labels = ['train'] * n_train + ['test'] * (n_total - n_train)
     df_sorted['split'] = split_labels
-    
+
     train_idx = df_sorted['split'] == 'train'
     test_idx = df_sorted['split'] == 'test'
-    
-    print(f"Time-based split: {n_train} train ({n_train/n_total*100:.1f}%), {n_total-n_train} test ({(n_total-n_train)/n_total*100:.1f}%)")
-    
+
+    logger.info("Time-based split: %d train (%.1f%%), %d test (%.1f%%)",
+                n_train, n_train/n_total*100, n_total-n_train, (n_total-n_train)/n_total*100)
+
     if n_train > 0:
         train_date_range = f"{df_sorted[train_idx]['decision_ts_utc'].min()} to {df_sorted[train_idx]['decision_ts_utc'].max()}"
-        print(f"Train date range: {train_date_range}")
-    
+        logger.info("Train date range: %s", train_date_range)
+
     if n_total - n_train > 0:
         test_date_range = f"{df_sorted[test_idx]['decision_ts_utc'].min()} to {df_sorted[test_idx]['decision_ts_utc'].max()}"
-        print(f"Test date range: {test_date_range}")
-    
+        logger.info("Test date range: %s", test_date_range)
+
     return df_sorted, train_idx, test_idx
 
 
@@ -122,66 +129,66 @@ def train_baseline_model(X_train, y_train, X_test, y_test):
     """Train logistic regression baseline model."""
     if len(X_train) == 0:
         raise ValueError("No training data available")
-    
-    print(f"Training logistic regression on {len(X_train)} samples...")
-    
+
+    logger.info("Training logistic regression on %d samples...", len(X_train))
+
     # Scale features
     scaler = StandardScaler()
     X_train_scaled = scaler.fit_transform(X_train)
     X_test_scaled = scaler.transform(X_test) if len(X_test) > 0 else np.array([]).reshape(0, X_train.shape[1])
-    
+
     # Train model
     model = LogisticRegression(random_state=RANDOM_STATE, max_iter=1000, class_weight="balanced")
     model.fit(X_train_scaled, y_train)
-    
+
     # Generate predictions
     train_scores = model.predict_proba(X_train_scaled)[:, 1] if len(X_train_scaled) > 0 else np.array([])
     test_scores = model.predict_proba(X_test_scaled)[:, 1] if len(X_test_scaled) > 0 else np.array([])
-    
-    print(f"✅ Model trained successfully")
-    
+
+    logger.info("Model trained successfully")
+
     return model, scaler, train_scores, test_scores
 
 
 def compute_metrics(y_true, scores, split_name):
-    """Compute and print evaluation metrics."""
+    """Compute and log evaluation metrics."""
     if len(y_true) == 0 or len(scores) == 0:
-        print(f"{split_name}: No data for evaluation")
+        logger.info("%s: No data for evaluation", split_name)
         return {}
-    
+
     metrics = {}
-    
+
     # Basic stats
     n_samples = len(y_true)
     n_positive = sum(y_true)
     positive_rate = n_positive / n_samples if n_samples > 0 else 0
-    
+
     metrics['n_samples'] = n_samples
     metrics['n_positive'] = n_positive
     metrics['positive_rate'] = positive_rate
-    
-    print(f"{split_name}: {n_samples} samples, {n_positive} positive ({positive_rate:.3f} rate)")
-    
+
+    logger.info("%s: %d samples, %d positive (%.3f rate)", split_name, n_samples, n_positive, positive_rate)
+
     # Skip advanced metrics for very small datasets or edge cases
     if n_samples < 5 or n_positive == 0 or n_positive == n_samples:
-        print(f"{split_name}: Skipping advanced metrics (insufficient or homogeneous data)")
+        logger.info("%s: Skipping advanced metrics (insufficient or homogeneous data)", split_name)
         return metrics
-    
+
     try:
         # PR-AUC (preferred)
         pr_auc = average_precision_score(y_true, scores)
         metrics['pr_auc'] = pr_auc
-        print(f"{split_name}: PR-AUC = {pr_auc:.4f}")
-        
+        logger.info("%s: PR-AUC = %.4f", split_name, pr_auc)
+
         # ROC-AUC (fallback)
         if len(np.unique(y_true)) > 1:  # Need both classes for ROC-AUC
             roc_auc = roc_auc_score(y_true, scores)
             metrics['roc_auc'] = roc_auc
-            print(f"{split_name}: ROC-AUC = {roc_auc:.4f}")
-    
+            logger.info("%s: ROC-AUC = %.4f", split_name, roc_auc)
+
     except Exception as e:
-        print(f"{split_name}: Could not compute advanced metrics: {e}")
-    
+        logger.warning("%s: Could not compute advanced metrics: %s", split_name, e)
+
     return metrics
 
 
@@ -207,17 +214,17 @@ def create_predictions_output(df_with_split, train_scores, test_scores, output_p
     ]
     pred_df = df_out[output_cols + ['split_order']].copy()
     pred_df.rename(columns={label_col: 'y_true'}, inplace=True)
-    
+
     # Sort by split_order (test first), then score desc within each split
     pred_df_sorted = pred_df.sort_values(['split_order', 'score'], ascending=[True, False])
-    
+
     # Drop split_order column before output
     pred_df_sorted = pred_df_sorted.drop(columns=['split_order'])
-    
+
     # Write to CSV
     pred_df_sorted.to_csv(output_path, index=False)
-    print(f"✅ Predictions written to {output_path}")
-    
+    logger.info("Predictions written to %s", output_path)
+
     return pred_df_sorted
 
 
@@ -257,7 +264,7 @@ def write_metrics_json(metrics, output_path):
     with open(output_path, 'w', encoding='utf-8') as f:
         json.dump(metrics, f, indent=2, sort_keys=True, ensure_ascii=False, default=_json_default)
         f.write('\n')
-    print(f"✅ Metrics written to {output_path}")
+    logger.info("Metrics written to %s", output_path)
 
 
 def main():
@@ -266,7 +273,7 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__
     )
-    
+
     parser.add_argument(
         '--training-examples-csv',
         required=True,
@@ -280,29 +287,39 @@ def main():
         help='Name of the label column to use as target (default: label_responded_within_7d)'
     )
 
+    parser.add_argument(
+        '--log-level',
+        default=None,
+        help='Log level: DEBUG, INFO, WARNING, ERROR (default: from LOG_LEVEL env var)'
+    )
+
     args = parser.parse_args()
+
+    setup_logging(args.log_level or LOG_LEVEL)
+
+    logger.info("Input CSV: %s, label_col: %s", args.training_examples_csv, args.label_col)
 
     # Validate input file
     try:
         validate_csv_file(args.training_examples_csv, label_col=args.label_col)
     except (FileNotFoundError, ValueError) as e:
-        print(f"❌ Error: {e}", file=sys.stderr)
+        logger.error("Error: %s", e)
         sys.exit(1)
-    
+
     # Determine output path
     predictions_path = args.training_examples_csv.parent / "predictions.csv"
-    
+
     try:
         # Load and prepare data
         df, X, y, feature_cols = load_and_prepare_data(args.training_examples_csv, label_col=args.label_col)
-        
+
         # Check for tiny dataset
         if len(df) < 20:
-            print(f"⚠️  Warning: Small dataset ({len(df)} rows). Metrics may be unreliable.")
-        
+            logger.warning("Small dataset (%d rows). Metrics may be unreliable.", len(df))
+
         # Create time-based split
         df_with_split, train_idx, test_idx = create_time_split(df)
-        
+
         # Rebuild X and y from sorted dataframe to align with split indices
         X = df_with_split[feature_cols].copy()
         y = df_with_split[args.label_col].fillna(0).astype(int).copy()
@@ -314,8 +331,8 @@ def main():
 
         # Early-exit if training split has only one class
         if y_train.nunique() < 2:
-            print("⚠️ Cannot train: training split has only one class (all 0s or all 1s). "
-                  "Expand date range or change label.")
+            logger.warning("Cannot train: training split has only one class (all 0s or all 1s). "
+                           "Expand date range or change label.")
             sys.exit(0)
 
         # Train model
@@ -325,23 +342,23 @@ def main():
         model_path = args.training_examples_csv.parent / "model.joblib"
         scaler_path = args.training_examples_csv.parent / "scaler.joblib"
         joblib.dump(model, model_path)
-        print(f"✅ Model saved to {model_path}")
+        logger.info("Model saved to %s", model_path)
         joblib.dump(scaler, scaler_path)
-        print(f"✅ Scaler saved to {scaler_path}")
+        logger.info("Scaler saved to %s", scaler_path)
 
-        # Compute and print metrics
-        print("\n" + "="*60)
-        print("MODEL EVALUATION")
-        print("="*60)
-        
+        # Compute and log metrics
+        logger.info("=" * 60)
+        logger.info("MODEL EVALUATION")
+        logger.info("=" * 60)
+
         train_metrics = compute_metrics(y_train.values, train_scores, "TRAIN")
         test_metrics = compute_metrics(y_test.values, test_scores, "TEST")
-        
+
         # Create predictions output
-        print("\n" + "="*60)
-        print("OUTPUT GENERATION")
-        print("="*60)
-        
+        logger.info("=" * 60)
+        logger.info("OUTPUT GENERATION")
+        logger.info("=" * 60)
+
         pred_df = create_predictions_output(df_with_split, train_scores, test_scores, predictions_path, label_col=args.label_col)
 
         # Compute precision@k from test split
@@ -364,21 +381,21 @@ def main():
         write_metrics_json(metrics_payload, metrics_path)
 
         # Final summary
-        print("\n" + "="*60)
-        print("✅ BASELINE TRAINING COMPLETED")
-        print("="*60)
-        print(f"Input: {args.training_examples_csv}")
-        print(f"Output: {predictions_path}")
-        print(f"Features used: {len(feature_cols)}")
-        print(f"Total samples: {len(df)}")
-        print(f"Train samples: {sum(train_idx)}")
-        print(f"Test samples: {sum(test_idx)}")
-        
+        logger.info("=" * 60)
+        logger.info("BASELINE TRAINING COMPLETED")
+        logger.info("=" * 60)
+        logger.info("Input: %s", args.training_examples_csv)
+        logger.info("Output: %s", predictions_path)
+        logger.info("Features used: %d", len(feature_cols))
+        logger.info("Total samples: %d", len(df))
+        logger.info("Train samples: %d", sum(train_idx))
+        logger.info("Test samples: %d", sum(test_idx))
+
         if 'pr_auc' in test_metrics:
-            print(f"Test PR-AUC: {test_metrics['pr_auc']:.4f}")
-        
+            logger.info("Test PR-AUC: %.4f", test_metrics['pr_auc'])
+
     except Exception as e:
-        print(f"\n❌ Training failed: {e}", file=sys.stderr)
+        logger.error("Training failed: %s", e)
         sys.exit(1)
 
 

@@ -212,3 +212,6 @@ tmp/snapshots/
 **/metrics.json
 **/*.joblib
 **/run_manifest_*.json
+**/outcomes.csv
+**/training_examples.csv
+.env
