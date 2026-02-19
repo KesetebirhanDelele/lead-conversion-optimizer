@@ -4,32 +4,36 @@ Daily scoring helper — thin wrapper around run_pipeline.py.
 Computes --since/--until from --days-back (default 90) and invokes
 run_pipeline.py as a subprocess with persist-scores enabled.
 
-Usage (predict with 90-day window):
-    python execution/run_daily.py \
-        --artifacts-dir ./tmp/runs/latest_train_run \
-        --outcomes-query-file ./queries/outcomes.sql \
+Usage (predict with 90-day window, registry model):
+    python execution/run_daily.py `
+        --registry-dir ./tmp/model_registry `
+        --outcomes-query-file ./queries/outcomes.sql `
+        --training-examples-query-file ./queries/gold_training_examples_proxy_v2.sql
+
+Usage (predict with explicit artifacts):
+    python execution/run_daily.py `
+        --artifacts-dir ./tmp/runs/latest_train_run `
+        --outcomes-query-file ./queries/outcomes.sql `
         --training-examples-query-file ./queries/gold_training_examples_proxy_v2.sql
 
 Usage (train with 120-day window):
-    python execution/run_daily.py --mode train --days-back 120 \
-        --outcomes-query-file ./queries/outcomes.sql \
+    python execution/run_daily.py --mode train --days-back 120 `
+        --outcomes-query-file ./queries/outcomes.sql `
         --training-examples-query-file ./queries/gold_training_examples_proxy_v2.sql
-
-PowerShell Task Scheduler example:
-    schtasks /create /tn "LeadScoring_Daily" /tr `
-        "C:\\Python312\\python.exe C:\\path\\to\\execution\\run_daily.py `
-         --artifacts-dir C:\\path\\to\\latest_train --mode predict `
-         --outcomes-query-file C:\\path\\to\\queries\\outcomes.sql `
-         --training-examples-query-file C:\\path\\to\\queries\\gold_training_examples_proxy_v2.sql" `
-        /sc daily /st 06:00
 """
 
 import argparse
+import logging
 import subprocess
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+from config import LOG_LEVEL
+from logging_utils import setup_logging
+
+
+logger = logging.getLogger(__name__)
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 
@@ -58,6 +62,8 @@ def build_pipeline_cmd(args, since, until):
     ]
     if args.artifacts_dir is not None:
         cmd.extend(["--artifacts-dir", str(args.artifacts_dir)])
+    if args.registry_dir is not None:
+        cmd.extend(["--registry-dir", str(args.registry_dir)])
     if args.label_col is not None:
         cmd.extend(["--label-col", args.label_col])
     if args.no_persist_scores:
@@ -88,20 +94,26 @@ def main():
                         help="SQL file for training examples extraction")
     parser.add_argument("--artifacts-dir", type=Path, default=None,
                         help="Directory containing model.joblib/scaler.joblib (predict mode)")
+    parser.add_argument("--registry-dir", type=Path, default=None,
+                        help="Model registry directory; predict mode loads from registry-dir/active/ when --artifacts-dir not provided")
     parser.add_argument("--label-col", default=None,
                         help="Label column (pass-through to run_pipeline.py)")
     parser.add_argument("--scores-table-name", default="dbo.lead_scores",
                         help="Target SQL table for scores (default: dbo.lead_scores)")
     parser.add_argument("--no-persist-scores", action="store_true", default=False,
                         help="Skip score persistence to SQL")
+    parser.add_argument("--log-level", default=None,
+                        help="Log level: DEBUG, INFO, WARNING, ERROR (default: from LOG_LEVEL env var)")
 
     args = parser.parse_args()
 
+    setup_logging(args.log_level or LOG_LEVEL)
+
     since, until = compute_date_range(args.days_back)
-    print(f"Date range: {since} to {until} ({args.days_back} days back)")
+    logger.info("Date range: %s to %s (%d days back)", since, until, args.days_back)
 
     cmd = build_pipeline_cmd(args, since, until)
-    print(f"Running: {' '.join(cmd)}")
+    logger.info("Running: %s", ' '.join(cmd))
 
     result = subprocess.run(cmd)
     sys.exit(result.returncode)

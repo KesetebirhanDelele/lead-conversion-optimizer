@@ -6,6 +6,7 @@ Secrets are NOT loaded here — connection string builders read them at runtime.
 """
 
 import os
+from pathlib import Path
 
 
 # ---------- pipeline defaults ----------
@@ -16,6 +17,7 @@ DEFAULT_SCORES_TABLE = "dbo.lead_scores"
 MODEL_FILENAME = "model.joblib"
 SCALER_FILENAME = "scaler.joblib"
 RANDOM_STATE = 42
+DEFAULT_REGISTRY_DIR = Path("tmp/model_registry")
 
 # ---------- logging ----------
 

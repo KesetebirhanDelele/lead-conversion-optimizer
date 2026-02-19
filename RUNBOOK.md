@@ -48,9 +48,66 @@ python execution/run_pipeline.py `
     --no-persist-scores
 ```
 
+## Promote a Model to the Registry
+
+After a successful training run, promote the model to make it the active version:
+
+```powershell
+python execution/promote_model.py `
+    --run-dir ./tmp/runs/<completed_train_run>
+```
+
+With a PR-AUC quality gate:
+
+```powershell
+python execution/promote_model.py `
+    --run-dir ./tmp/runs/<completed_train_run> `
+    --min-pr-auc 0.15 `
+    --notes "v2 with voicemail features"
+```
+
+Force promotion (skip PR-AUC check):
+
+```powershell
+python execution/promote_model.py `
+    --run-dir ./tmp/runs/<completed_train_run> `
+    --force
+```
+
+## Model Registry Layout
+
+```
+tmp/model_registry/
+  active/                    # always points to the latest promoted version
+    model.joblib
+    scaler.joblib
+    metrics.json
+    model_card.json
+  versions/
+    20240615T120000Z/        # timestamped version snapshots
+      model.joblib
+      scaler.joblib
+      metrics.json
+      model_card.json
+    20240701T080000Z/
+      ...
+```
+
 ## Score New Leads (predict mode)
 
-Reuses a previously trained model:
+Using the model registry (recommended):
+
+```powershell
+python execution/run_pipeline.py --mode predict `
+    --registry-dir ./tmp/model_registry `
+    --since 2024-06-01 --until 2024-07-01 `
+    --target booked_call_within_7d `
+    --out-root ./tmp/runs `
+    --outcomes-query-file ./queries/outcomes.sql `
+    --training-examples-query-file ./queries/gold_training_examples_proxy_v2.sql
+```
+
+Using an explicit artifacts directory (overrides registry):
 
 ```powershell
 python execution/run_pipeline.py --mode predict `
@@ -64,7 +121,16 @@ python execution/run_pipeline.py --mode predict `
 
 ## Daily Scoring Job
 
-Uses `run_daily.py` which computes `--since`/`--until` automatically:
+Using the model registry:
+
+```powershell
+python execution/run_daily.py `
+    --registry-dir ./tmp/model_registry `
+    --outcomes-query-file ./queries/outcomes.sql `
+    --training-examples-query-file ./queries/gold_training_examples_proxy_v2.sql
+```
+
+Using an explicit artifacts directory:
 
 ```powershell
 python execution/run_daily.py `
@@ -79,6 +145,24 @@ Weekly retrain (120-day window):
 python execution/run_daily.py --mode train --days-back 120 `
     --outcomes-query-file ./queries/outcomes.sql `
     --training-examples-query-file ./queries/gold_training_examples_proxy_v2.sql
+```
+
+### PowerShell Task Scheduler
+
+Daily predict using registry (06:00 UTC):
+
+```powershell
+schtasks /create /tn "LeadScoring_Daily" /tr `
+    "C:\Python312\python.exe C:\path\to\execution\run_daily.py --registry-dir C:\path\to\tmp\model_registry --outcomes-query-file C:\path\to\queries\outcomes.sql --training-examples-query-file C:\path\to\queries\gold_training_examples_proxy_v2.sql" `
+    /sc daily /st 06:00
+```
+
+Weekly retrain (Sunday 02:00):
+
+```powershell
+schtasks /create /tn "LeadScoring_WeeklyRetrain" /tr `
+    "C:\Python312\python.exe C:\path\to\execution\run_daily.py --mode train --days-back 120 --outcomes-query-file C:\path\to\queries\outcomes.sql --training-examples-query-file C:\path\to\queries\gold_training_examples_proxy_v2.sql" `
+    /sc weekly /d SUN /st 02:00
 ```
 
 ## Individual Scripts
@@ -183,4 +267,4 @@ python execution/train_baseline.py `
 | `ModuleNotFoundError: config` | Run from repo root or add `execution/` to `PYTHONPATH` |
 | `pyodbc.Error: ... driver not found` | Install [ODBC Driver 18 for SQL Server](https://learn.microsoft.com/en-us/sql/connect/odbc/download-odbc-driver-for-sql-server) |
 | `Cannot train: training split has only one class` | Expand date range or use a different label column |
-| `model.joblib not found` | Run training first, or provide `--artifacts-dir` |
+| `model.joblib not found` | Run training first, promote a model (`promote_model.py`), or provide `--artifacts-dir` / `--registry-dir` |

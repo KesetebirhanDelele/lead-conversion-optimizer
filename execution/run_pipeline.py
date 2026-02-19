@@ -32,6 +32,7 @@ Usage (skip score persistence):
 """
 
 import argparse
+import csv
 import logging
 import shutil
 import subprocess
@@ -103,6 +104,14 @@ def build_write_scores_cmd(predictions_csv, metrics_json, table_name="dbo.lead_s
     return cmd
 
 
+def _csv_has_data_rows(path):
+    """Return True if CSV file has at least one data row beyond the header."""
+    with open(path, 'r', encoding='utf-8') as f:
+        reader = csv.reader(f)
+        next(reader, None)  # skip header
+        return next(reader, None) is not None
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Run extract + train pipeline end-to-end",
@@ -121,7 +130,8 @@ def main():
     parser.add_argument("--persist-scores", action="store_true", default=True, help="Persist scores to SQL after training/prediction (default: True)")
     parser.add_argument("--no-persist-scores", action="store_false", dest="persist_scores", help="Skip score persistence to SQL")
     parser.add_argument("--scores-table-name", default="dbo.lead_scores", help="Target SQL table for scores (default: dbo.lead_scores)")
-    parser.add_argument("--artifacts-dir", type=Path, default=None, help="Directory containing model.joblib/scaler.joblib for predict mode (overrides run_dir)")
+    parser.add_argument("--artifacts-dir", type=Path, default=None, help="Directory containing model.joblib/scaler.joblib for predict mode (takes precedence over --registry-dir)")
+    parser.add_argument("--registry-dir", type=Path, default=None, help="Model registry directory; predict mode loads from registry-dir/active/ when --artifacts-dir not provided")
     parser.add_argument("--log-level", default=None, help="Log level: DEBUG, INFO, WARNING, ERROR (default: from LOG_LEVEL env var)")
 
     args = parser.parse_args()
@@ -154,6 +164,9 @@ def main():
         logger.error("training_examples.csv not found in %s", run_dir)
         sys.exit(1)
 
+    # Check if training_examples.csv has any data rows
+    has_data = _csv_has_data_rows(training_csv)
+
     # Step 2: Train or Predict
     if args.mode == "train":
         logger.info("=" * 60)
@@ -172,28 +185,37 @@ def main():
         logger.info("STEP 2: PREDICT (score only)")
         logger.info("=" * 60)
 
-        # If --artifacts-dir is provided, copy model artifacts into run_dir
-        if args.artifacts_dir is not None:
-            if not args.artifacts_dir.is_dir():
-                logger.error("--artifacts-dir does not exist or is not a directory: %s", args.artifacts_dir)
-                sys.exit(1)
-            for artifact in ("model.joblib", "scaler.joblib"):
-                src = args.artifacts_dir / artifact
-                if not src.exists():
-                    logger.error("%s not found in --artifacts-dir %s", artifact, args.artifacts_dir)
-                    sys.exit(1)
-                shutil.copy2(src, run_dir / artifact)
-                logger.info("Copied %s from %s to %s", artifact, args.artifacts_dir, run_dir)
+        if not has_data:
+            logger.warning("training_examples.csv has 0 data rows; skipping artifact copy and prediction.")
+        else:
+            # Determine artifact source: --artifacts-dir takes precedence, then --registry-dir/active/
+            artifact_source = None
+            if args.artifacts_dir is not None:
+                artifact_source = args.artifacts_dir
+            elif args.registry_dir is not None:
+                artifact_source = args.registry_dir / "active"
 
-        # Verify model artifacts exist before calling predict.py
-        model_path = run_dir / "model.joblib"
-        scaler_path = run_dir / "scaler.joblib"
-        if not model_path.exists():
-            logger.error("model.joblib not found in %s. Run training first or copy artifacts into the run folder.", run_dir)
-            sys.exit(1)
-        if not scaler_path.exists():
-            logger.error("scaler.joblib not found in %s. Run training first or copy artifacts into the run folder.", run_dir)
-            sys.exit(1)
+            if artifact_source is not None:
+                if not artifact_source.is_dir():
+                    logger.error("Artifact source does not exist or is not a directory: %s", artifact_source)
+                    sys.exit(1)
+                for artifact in ("model.joblib", "scaler.joblib"):
+                    src = artifact_source / artifact
+                    if not src.exists():
+                        logger.error("%s not found in %s", artifact, artifact_source)
+                        sys.exit(1)
+                    shutil.copy2(src, run_dir / artifact)
+                    logger.info("Copied %s from %s to %s", artifact, artifact_source, run_dir)
+
+            # Verify model artifacts exist before calling predict.py
+            model_path = run_dir / "model.joblib"
+            scaler_path = run_dir / "scaler.joblib"
+            if not model_path.exists():
+                logger.error("model.joblib not found in %s. Promote a model (promote_model.py), pass --registry-dir, or pass --artifacts-dir.", run_dir)
+                sys.exit(1)
+            if not scaler_path.exists():
+                logger.error("scaler.joblib not found in %s. Promote a model (promote_model.py), pass --registry-dir, or pass --artifacts-dir.", run_dir)
+                sys.exit(1)
 
         predict_cmd = build_predict_cmd(training_csv)
         logger.info("Running: %s", ' '.join(predict_cmd))
@@ -214,16 +236,20 @@ def main():
             logger.error("metrics.json not found in %s", run_dir)
             sys.exit(1)
 
-        logger.info("=" * 60)
-        logger.info("STEP 3: PERSIST SCORES TO SQL")
-        logger.info("=" * 60)
+        # Skip persistence when predictions have 0 data rows
+        if not _csv_has_data_rows(predictions_csv):
+            logger.warning("predictions.csv has 0 data rows; skipping score persistence.")
+        else:
+            logger.info("=" * 60)
+            logger.info("STEP 3: PERSIST SCORES TO SQL")
+            logger.info("=" * 60)
 
-        write_cmd = build_write_scores_cmd(predictions_csv, metrics_json, table_name=args.scores_table_name)
-        logger.info("Running: %s", ' '.join(write_cmd))
-        result = subprocess.run(write_cmd)
-        if result.returncode != 0:
-            logger.error("Score persistence failed with exit code %d", result.returncode)
-            sys.exit(result.returncode)
+            write_cmd = build_write_scores_cmd(predictions_csv, metrics_json, table_name=args.scores_table_name)
+            logger.info("Running: %s", ' '.join(write_cmd))
+            result = subprocess.run(write_cmd)
+            if result.returncode != 0:
+                logger.error("Score persistence failed with exit code %d", result.returncode)
+                sys.exit(result.returncode)
 
     logger.info("=" * 60)
     logger.info("PIPELINE COMPLETED")

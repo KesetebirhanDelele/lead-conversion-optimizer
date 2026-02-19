@@ -186,6 +186,35 @@ def write_metrics_json(metrics, output_path):
     logger.info("Metrics written to %s", output_path)
 
 
+def _write_empty_outputs(args, csv_headers, predictions_out, metrics_out, model_path, scaler_path):
+    """Write header-only predictions.csv and minimal metrics.json for a 0-row input."""
+    output_cols = list(ID_COLS) + ['score']
+    has_label = args.label_col in csv_headers
+    if has_label:
+        output_cols.append('y_true')
+
+    with open(predictions_out, 'w', newline='', encoding='utf-8') as f:
+        writer = csv.writer(f)
+        writer.writerow(output_cols)
+    logger.info("Empty predictions written to %s", predictions_out)
+
+    metrics = {
+        "run_timestamp_utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "input_training_examples_csv": str(args.training_examples_csv),
+        "predictions_csv": str(predictions_out),
+        "label_col": args.label_col,
+        "feature_cols": list(FEATURE_COLS),
+        "n_samples": 0,
+        "score_quantiles": None,
+        "model_path": str(model_path),
+        "scaler_path": str(scaler_path),
+        "n_positive": 0,
+        "positive_rate": 0.0,
+        "precision_at_k": [],
+    }
+    write_metrics_json(metrics, metrics_out)
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Score data using a previously trained model and scaler",
@@ -224,7 +253,23 @@ def main():
     predictions_out = args.predictions_out or (csv_dir / "predictions.csv")
     metrics_out = args.metrics_out or (csv_dir / "metrics.json")
 
-    # Validate inputs
+    # Check CSV exists before anything else
+    if not args.training_examples_csv.exists():
+        logger.error("CSV not found: %s", args.training_examples_csv)
+        sys.exit(1)
+
+    # Empty-data guard: if CSV has 0 data rows, write empty outputs and exit 0
+    # (checked before model/scaler validation — no artifacts needed for 0 rows)
+    with open(args.training_examples_csv, 'r', encoding='utf-8') as f:
+        reader = csv.DictReader(f)
+        csv_headers = set(reader.fieldnames or [])
+        has_data = next(reader, None) is not None
+    if not has_data:
+        logger.warning("No rows to score; writing empty outputs and exiting 0.")
+        _write_empty_outputs(args, csv_headers, predictions_out, metrics_out, model_path, scaler_path)
+        sys.exit(0)
+
+    # Validate inputs (model + scaler only needed when we have data to score)
     try:
         validate_inputs(args.training_examples_csv, model_path, scaler_path)
     except (FileNotFoundError, ValueError) as e:

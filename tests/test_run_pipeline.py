@@ -10,7 +10,7 @@ from unittest.mock import patch, MagicMock
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "execution"))
-from run_pipeline import build_run_folder_name, build_extract_cmd, build_train_cmd, build_predict_cmd, build_write_scores_cmd, SCRIPT_DIR
+from run_pipeline import build_run_folder_name, build_extract_cmd, build_train_cmd, build_predict_cmd, build_write_scores_cmd, _csv_has_data_rows, SCRIPT_DIR
 
 
 # ---------- run folder naming ----------
@@ -151,7 +151,7 @@ class TestPipelineOrchestration:
                 out_idx = cmd.index("--out")
                 run_dir = Path(cmd[out_idx + 1])
                 run_dir.mkdir(parents=True, exist_ok=True)
-                (run_dir / "training_examples.csv").write_text("header\n", encoding="utf-8")
+                (run_dir / "training_examples.csv").write_text("header\nrow\n", encoding="utf-8")
             return MagicMock(returncode=0)
 
         test_args = [
@@ -226,7 +226,7 @@ class TestPredictModeOrchestration:
                 out_idx = cmd.index("--out")
                 run_dir = Path(cmd[out_idx + 1])
                 run_dir.mkdir(parents=True, exist_ok=True)
-                (run_dir / "training_examples.csv").write_text("h\n", encoding="utf-8")
+                (run_dir / "training_examples.csv").write_text("h\nr\n", encoding="utf-8")
                 (run_dir / "model.joblib").write_text("fake", encoding="utf-8")
                 (run_dir / "scaler.joblib").write_text("fake", encoding="utf-8")
             return MagicMock(returncode=0)
@@ -278,7 +278,7 @@ class TestPredictModeMissingArtifacts:
                 out_idx = cmd.index("--out")
                 run_dir = Path(cmd[out_idx + 1])
                 run_dir.mkdir(parents=True, exist_ok=True)
-                (run_dir / "training_examples.csv").write_text("h\n", encoding="utf-8")
+                (run_dir / "training_examples.csv").write_text("h\nr\n", encoding="utf-8")
                 # model.joblib missing, scaler present
                 (run_dir / "scaler.joblib").write_text("fake", encoding="utf-8")
             return MagicMock(returncode=0)
@@ -307,7 +307,7 @@ class TestPredictModeMissingArtifacts:
                 out_idx = cmd.index("--out")
                 run_dir = Path(cmd[out_idx + 1])
                 run_dir.mkdir(parents=True, exist_ok=True)
-                (run_dir / "training_examples.csv").write_text("h\n", encoding="utf-8")
+                (run_dir / "training_examples.csv").write_text("h\nr\n", encoding="utf-8")
                 # scaler.joblib missing, model present
                 (run_dir / "model.joblib").write_text("fake", encoding="utf-8")
             return MagicMock(returncode=0)
@@ -364,12 +364,12 @@ class TestPersistScoresOrchestration:
                 out_idx = cmd.index("--out")
                 run_dir = Path(cmd[out_idx + 1])
                 run_dir.mkdir(parents=True, exist_ok=True)
-                (run_dir / "training_examples.csv").write_text("h\n", encoding="utf-8")
+                (run_dir / "training_examples.csv").write_text("h\nr\n", encoding="utf-8")
             elif "train_baseline.py" in cmd[1]:
                 csv_idx = cmd.index("--training-examples-csv")
                 csv_path = Path(cmd[csv_idx + 1])
                 run_dir = csv_path.parent
-                (run_dir / "predictions.csv").write_text("h\n", encoding="utf-8")
+                (run_dir / "predictions.csv").write_text("h\nr\n", encoding="utf-8")
                 (run_dir / "metrics.json").write_text("{}", encoding="utf-8")
             return MagicMock(returncode=0)
 
@@ -396,14 +396,14 @@ class TestPersistScoresOrchestration:
                 out_idx = cmd.index("--out")
                 run_dir = Path(cmd[out_idx + 1])
                 run_dir.mkdir(parents=True, exist_ok=True)
-                (run_dir / "training_examples.csv").write_text("h\n", encoding="utf-8")
+                (run_dir / "training_examples.csv").write_text("h\nr\n", encoding="utf-8")
                 (run_dir / "model.joblib").write_text("fake", encoding="utf-8")
                 (run_dir / "scaler.joblib").write_text("fake", encoding="utf-8")
             elif "predict.py" in cmd[1]:
                 csv_idx = cmd.index("--training-examples-csv")
                 csv_path = Path(cmd[csv_idx + 1])
                 run_dir = csv_path.parent
-                (run_dir / "predictions.csv").write_text("h\n", encoding="utf-8")
+                (run_dir / "predictions.csv").write_text("h\nr\n", encoding="utf-8")
                 (run_dir / "metrics.json").write_text("{}", encoding="utf-8")
             return MagicMock(returncode=0)
 
@@ -430,7 +430,7 @@ class TestPersistScoresOrchestration:
                 out_idx = cmd.index("--out")
                 run_dir = Path(cmd[out_idx + 1])
                 run_dir.mkdir(parents=True, exist_ok=True)
-                (run_dir / "training_examples.csv").write_text("h\n", encoding="utf-8")
+                (run_dir / "training_examples.csv").write_text("h\nr\n", encoding="utf-8")
             return MagicMock(returncode=0)
 
         test_args = _base_args(tmp_path) + ["--no-persist-scores"]
@@ -457,11 +457,11 @@ class TestPersistScoresOrchestration:
                 out_idx = cmd.index("--out")
                 run_dir = Path(cmd[out_idx + 1])
                 run_dir.mkdir(parents=True, exist_ok=True)
-                (run_dir / "training_examples.csv").write_text("h\n", encoding="utf-8")
+                (run_dir / "training_examples.csv").write_text("h\nr\n", encoding="utf-8")
             elif "train_baseline.py" in cmd[1]:
                 csv_idx = cmd.index("--training-examples-csv")
                 run_dir = Path(cmd[csv_idx + 1]).parent
-                (run_dir / "predictions.csv").write_text("h\n", encoding="utf-8")
+                (run_dir / "predictions.csv").write_text("h\nr\n", encoding="utf-8")
                 (run_dir / "metrics.json").write_text("{}", encoding="utf-8")
             return MagicMock(returncode=0)
 
@@ -485,7 +485,7 @@ class TestPersistScoresOrchestration:
                 out_idx = cmd.index("--out")
                 run_dir = Path(cmd[out_idx + 1])
                 run_dir.mkdir(parents=True, exist_ok=True)
-                (run_dir / "training_examples.csv").write_text("h\n", encoding="utf-8")
+                (run_dir / "training_examples.csv").write_text("h\nr\n", encoding="utf-8")
             # train_baseline.py succeeds but does NOT produce predictions.csv
             return MagicMock(returncode=0)
 
@@ -519,7 +519,7 @@ class TestArtifactsDir:
                 out_idx = cmd.index("--out")
                 run_dir = Path(cmd[out_idx + 1])
                 run_dir.mkdir(parents=True, exist_ok=True)
-                (run_dir / "training_examples.csv").write_text("h\n", encoding="utf-8")
+                (run_dir / "training_examples.csv").write_text("h\nr\n", encoding="utf-8")
             elif "predict.py" in cmd[1]:
                 csv_idx = cmd.index("--training-examples-csv")
                 run_dir = Path(cmd[csv_idx + 1]).parent
@@ -527,7 +527,7 @@ class TestArtifactsDir:
                 assert (run_dir / "model.joblib").exists()
                 assert (run_dir / "scaler.joblib").exists()
                 assert (run_dir / "model.joblib").read_text(encoding="utf-8") == "model_data"
-                (run_dir / "predictions.csv").write_text("h\n", encoding="utf-8")
+                (run_dir / "predictions.csv").write_text("h\nr\n", encoding="utf-8")
                 (run_dir / "metrics.json").write_text("{}", encoding="utf-8")
             return MagicMock(returncode=0)
 
@@ -553,7 +553,7 @@ class TestArtifactsDir:
                 out_idx = cmd.index("--out")
                 run_dir = Path(cmd[out_idx + 1])
                 run_dir.mkdir(parents=True, exist_ok=True)
-                (run_dir / "training_examples.csv").write_text("h\n", encoding="utf-8")
+                (run_dir / "training_examples.csv").write_text("h\nr\n", encoding="utf-8")
             return MagicMock(returncode=0)
 
         test_args = _base_args(tmp_path) + [
@@ -581,7 +581,7 @@ class TestArtifactsDir:
                 out_idx = cmd.index("--out")
                 run_dir = Path(cmd[out_idx + 1])
                 run_dir.mkdir(parents=True, exist_ok=True)
-                (run_dir / "training_examples.csv").write_text("h\n", encoding="utf-8")
+                (run_dir / "training_examples.csv").write_text("h\nr\n", encoding="utf-8")
             return MagicMock(returncode=0)
 
         test_args = _base_args(tmp_path) + [
@@ -594,3 +594,266 @@ class TestArtifactsDir:
                 with pytest.raises(SystemExit) as exc_info:
                     main()
                 assert exc_info.value.code == 1
+
+
+# ---------- registry-dir predict mode ----------
+
+class TestRegistryPredict:
+    def test_predict_uses_registry_active_by_default(self, tmp_path):
+        """--registry-dir copies model/scaler from active/ into run_dir."""
+        from run_pipeline import main
+
+        # Create a fake registry with active/ dir
+        registry = tmp_path / "registry"
+        active = registry / "active"
+        active.mkdir(parents=True)
+        (active / "model.joblib").write_text("registry_model", encoding="utf-8")
+        (active / "scaler.joblib").write_text("registry_scaler", encoding="utf-8")
+
+        call_log = []
+
+        def fake_subprocess_run(cmd, **kwargs):
+            call_log.append(cmd)
+            if "extract_snapshot.py" in cmd[1]:
+                out_idx = cmd.index("--out")
+                run_dir = Path(cmd[out_idx + 1])
+                run_dir.mkdir(parents=True, exist_ok=True)
+                (run_dir / "training_examples.csv").write_text("h\nr\n", encoding="utf-8")
+            elif "predict.py" in cmd[1]:
+                csv_idx = cmd.index("--training-examples-csv")
+                run_dir = Path(cmd[csv_idx + 1]).parent
+                # Verify registry artifacts were copied into run_dir
+                assert (run_dir / "model.joblib").exists()
+                assert (run_dir / "model.joblib").read_text(encoding="utf-8") == "registry_model"
+                (run_dir / "predictions.csv").write_text("h\nr\n", encoding="utf-8")
+                (run_dir / "metrics.json").write_text("{}", encoding="utf-8")
+            return MagicMock(returncode=0)
+
+        test_args = _base_args(tmp_path) + [
+            "--mode", "predict",
+            "--registry-dir", str(registry),
+            "--no-persist-scores",
+        ]
+
+        with patch("run_pipeline.subprocess.run", side_effect=fake_subprocess_run):
+            with patch("sys.argv", ["run_pipeline.py"] + test_args):
+                main()
+
+        assert len(call_log) == 2
+        assert "extract_snapshot.py" in call_log[0][1]
+        assert "predict.py" in call_log[1][1]
+
+    def test_predict_errors_when_registry_active_missing(self, tmp_path):
+        """--registry-dir pointing to dir without active/ exits 1."""
+        from run_pipeline import main
+
+        # Registry exists but no active/ subdirectory
+        registry = tmp_path / "registry"
+        registry.mkdir()
+
+        def fake_subprocess_run(cmd, **kwargs):
+            if "extract_snapshot.py" in cmd[1]:
+                out_idx = cmd.index("--out")
+                run_dir = Path(cmd[out_idx + 1])
+                run_dir.mkdir(parents=True, exist_ok=True)
+                (run_dir / "training_examples.csv").write_text("h\nr\n", encoding="utf-8")
+            return MagicMock(returncode=0)
+
+        test_args = _base_args(tmp_path) + [
+            "--mode", "predict",
+            "--registry-dir", str(registry),
+        ]
+
+        with patch("run_pipeline.subprocess.run", side_effect=fake_subprocess_run):
+            with patch("sys.argv", ["run_pipeline.py"] + test_args):
+                with pytest.raises(SystemExit) as exc_info:
+                    main()
+                assert exc_info.value.code == 1
+
+    def test_artifacts_dir_takes_precedence_over_registry(self, tmp_path):
+        """When both --artifacts-dir and --registry-dir provided, artifacts-dir wins."""
+        from run_pipeline import main
+
+        # Create registry with active/
+        registry = tmp_path / "registry"
+        active = registry / "active"
+        active.mkdir(parents=True)
+        (active / "model.joblib").write_text("registry_model", encoding="utf-8")
+        (active / "scaler.joblib").write_text("registry_scaler", encoding="utf-8")
+
+        # Create artifacts-dir with different content
+        artifacts = tmp_path / "artifacts"
+        artifacts.mkdir()
+        (artifacts / "model.joblib").write_text("artifacts_model", encoding="utf-8")
+        (artifacts / "scaler.joblib").write_text("artifacts_scaler", encoding="utf-8")
+
+        call_log = []
+
+        def fake_subprocess_run(cmd, **kwargs):
+            call_log.append(cmd)
+            if "extract_snapshot.py" in cmd[1]:
+                out_idx = cmd.index("--out")
+                run_dir = Path(cmd[out_idx + 1])
+                run_dir.mkdir(parents=True, exist_ok=True)
+                (run_dir / "training_examples.csv").write_text("h\nr\n", encoding="utf-8")
+            elif "predict.py" in cmd[1]:
+                csv_idx = cmd.index("--training-examples-csv")
+                run_dir = Path(cmd[csv_idx + 1]).parent
+                # Verify artifacts-dir content was used, not registry
+                assert (run_dir / "model.joblib").read_text(encoding="utf-8") == "artifacts_model"
+                (run_dir / "predictions.csv").write_text("h\nr\n", encoding="utf-8")
+                (run_dir / "metrics.json").write_text("{}", encoding="utf-8")
+            return MagicMock(returncode=0)
+
+        test_args = _base_args(tmp_path) + [
+            "--mode", "predict",
+            "--artifacts-dir", str(artifacts),
+            "--registry-dir", str(registry),
+            "--no-persist-scores",
+        ]
+
+        with patch("run_pipeline.subprocess.run", side_effect=fake_subprocess_run):
+            with patch("sys.argv", ["run_pipeline.py"] + test_args):
+                main()
+
+        assert len(call_log) == 2
+        assert "predict.py" in call_log[1][1]
+
+
+# ---------- empty-snapshot predict mode ----------
+
+class TestEmptySnapshotPredict:
+    def test_predict_zero_rows_skips_artifact_copy_and_succeeds(self, tmp_path):
+        """Predict mode with 0-row training_examples.csv should skip artifact copy,
+        call predict.py, and succeed without model artifacts."""
+        from run_pipeline import main
+
+        call_log = []
+
+        def fake_subprocess_run(cmd, **kwargs):
+            call_log.append(cmd)
+            if "extract_snapshot.py" in cmd[1]:
+                out_idx = cmd.index("--out")
+                run_dir = Path(cmd[out_idx + 1])
+                run_dir.mkdir(parents=True, exist_ok=True)
+                # Header-only CSV (0 data rows)
+                (run_dir / "training_examples.csv").write_text(
+                    "org_id,enrollment_id,ghl_contact_id,decision_ts_utc,score\n",
+                    encoding="utf-8",
+                )
+                # No model.joblib or scaler.joblib — not needed for 0 rows
+            elif "predict.py" in cmd[1]:
+                # predict.py should handle 0 rows and write empty outputs
+                csv_idx = cmd.index("--training-examples-csv")
+                run_dir = Path(cmd[csv_idx + 1]).parent
+                (run_dir / "predictions.csv").write_text(
+                    "org_id,enrollment_id,ghl_contact_id,decision_ts_utc,score\n",
+                    encoding="utf-8",
+                )
+                (run_dir / "metrics.json").write_text('{"n_samples": 0}', encoding="utf-8")
+            return MagicMock(returncode=0)
+
+        test_args = _base_args(tmp_path) + [
+            "--mode", "predict",
+            "--no-persist-scores",
+        ]
+
+        with patch("run_pipeline.subprocess.run", side_effect=fake_subprocess_run):
+            with patch("sys.argv", ["run_pipeline.py"] + test_args):
+                main()
+
+        # extract + predict called; no artifact copy errors
+        assert len(call_log) == 2
+        assert "extract_snapshot.py" in call_log[0][1]
+        assert "predict.py" in call_log[1][1]
+
+    def test_predict_zero_rows_skips_persist(self, tmp_path):
+        """Predict mode with 0-row CSV: Step 3 persist is skipped when
+        predictions.csv has 0 data rows."""
+        from run_pipeline import main
+
+        call_log = []
+
+        def fake_subprocess_run(cmd, **kwargs):
+            call_log.append(cmd)
+            if "extract_snapshot.py" in cmd[1]:
+                out_idx = cmd.index("--out")
+                run_dir = Path(cmd[out_idx + 1])
+                run_dir.mkdir(parents=True, exist_ok=True)
+                # Header-only CSV (0 data rows)
+                (run_dir / "training_examples.csv").write_text(
+                    "org_id,enrollment_id,ghl_contact_id,decision_ts_utc,score\n",
+                    encoding="utf-8",
+                )
+            elif "predict.py" in cmd[1]:
+                csv_idx = cmd.index("--training-examples-csv")
+                run_dir = Path(cmd[csv_idx + 1]).parent
+                # predict.py writes header-only predictions.csv
+                (run_dir / "predictions.csv").write_text(
+                    "org_id,enrollment_id,ghl_contact_id,decision_ts_utc,score\n",
+                    encoding="utf-8",
+                )
+                (run_dir / "metrics.json").write_text('{"n_samples": 0}', encoding="utf-8")
+            return MagicMock(returncode=0)
+
+        # persist-scores is ON (default)
+        test_args = _base_args(tmp_path) + [
+            "--mode", "predict",
+            "--persist-scores",
+        ]
+
+        with patch("run_pipeline.subprocess.run", side_effect=fake_subprocess_run):
+            with patch("sys.argv", ["run_pipeline.py"] + test_args):
+                main()
+
+        # extract + predict called; write_scores_to_sql.py NOT called
+        assert len(call_log) == 2
+        assert "extract_snapshot.py" in call_log[0][1]
+        assert "predict.py" in call_log[1][1]
+        assert all("write_scores_to_sql.py" not in c[1] for c in call_log)
+
+    def test_train_mode_still_calls_train_with_empty_csv(self, tmp_path):
+        """Train mode with 0-row CSV still calls train_baseline.py (train handles its own errors)."""
+        from run_pipeline import main
+
+        call_log = []
+
+        def fake_subprocess_run(cmd, **kwargs):
+            call_log.append(cmd)
+            if "extract_snapshot.py" in cmd[1]:
+                out_idx = cmd.index("--out")
+                run_dir = Path(cmd[out_idx + 1])
+                run_dir.mkdir(parents=True, exist_ok=True)
+                (run_dir / "training_examples.csv").write_text("h\nr\n", encoding="utf-8")
+            return MagicMock(returncode=0)
+
+        test_args = _base_args(tmp_path) + ["--no-persist-scores"]
+
+        with patch("run_pipeline.subprocess.run", side_effect=fake_subprocess_run):
+            with patch("sys.argv", ["run_pipeline.py"] + test_args):
+                main()
+
+        assert len(call_log) == 2
+        assert "train_baseline.py" in call_log[1][1]
+
+
+# ---------- _csv_has_data_rows ----------
+
+class TestCsvHasDataRows:
+    def test_returns_true_for_csv_with_data(self, tmp_path):
+        from run_pipeline import _csv_has_data_rows
+        csv_path = tmp_path / "data.csv"
+        csv_path.write_text("col1,col2\na,b\n", encoding="utf-8")
+        assert _csv_has_data_rows(csv_path) is True
+
+    def test_returns_false_for_header_only_csv(self, tmp_path):
+        from run_pipeline import _csv_has_data_rows
+        csv_path = tmp_path / "data.csv"
+        csv_path.write_text("col1,col2\n", encoding="utf-8")
+        assert _csv_has_data_rows(csv_path) is False
+
+    def test_returns_false_for_empty_file(self, tmp_path):
+        from run_pipeline import _csv_has_data_rows
+        csv_path = tmp_path / "data.csv"
+        csv_path.write_text("", encoding="utf-8")
+        assert _csv_has_data_rows(csv_path) is False
